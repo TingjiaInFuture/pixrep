@@ -6,7 +6,7 @@ can scan a macro index first and then dive into per-file details on demand.
 ## Install (local)
 
 ```bash
-pip install -e .
+pip install pixcode
 ```
 
 ## Usage
