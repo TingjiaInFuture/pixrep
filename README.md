@@ -3,7 +3,7 @@
 pixcode converts code repositories into a layered PDF set so large language models
 can scan a macro index first and then dive into per-file details on demand.
 
-## Install (local)
+## Install
 
 ```bash
 pip install pixcode
