@@ -1,0 +1,23 @@
+from reportlab.lib.colors import HexColor
+
+COLORS = {
+    "bg": HexColor("#282c34"),
+    "bg_light": HexColor("#2c313a"),
+    "fg": HexColor("#abb2bf"),
+    "comment": HexColor("#5c6370"),
+    "keyword": HexColor("#c678dd"),
+    "string": HexColor("#98c379"),
+    "number": HexColor("#d19a66"),
+    "function": HexColor("#61afef"),
+    "type": HexColor("#e5c07b"),
+    "operator": HexColor("#56b6c2"),
+    "accent": HexColor("#61afef"),
+    "accent2": HexColor("#c678dd"),
+    "border": HexColor("#3e4451"),
+    "line_no": HexColor("#4b5263"),
+    "white": HexColor("#ffffff"),
+    "red": HexColor("#e06c75"),
+    "green": HexColor("#98c379"),
+    "header_bg": HexColor("#21252b"),
+    "tag": HexColor("#e06c75"),
+}

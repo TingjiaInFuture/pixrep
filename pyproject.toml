@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pixcode"
+version = "0.1.0"
+description = "Convert code repositories into structured PDF collections for LLM collaboration."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["reportlab>=3.6"]
+
+[project.scripts]
+pixcode = "pixcode.cli:main"
+
+[tool.setuptools]
+packages = ["pixcode"]
