@@ -3,6 +3,23 @@ from pathlib import Path
 
 
 @dataclass
+class SemanticMap:
+    kind: str = "none"
+    lines: list[str] = field(default_factory=list)
+    node_count: int = 0
+    edge_count: int = 0
+
+
+@dataclass
+class LintIssue:
+    line: int
+    severity: str
+    tool: str
+    code: str
+    message: str
+
+
+@dataclass
 class FileInfo:
     path: Path
     abs_path: Path
@@ -11,6 +28,8 @@ class FileInfo:
     line_count: int = 0
     content: str = ""
     index: int = 0
+    semantic_map: SemanticMap = field(default_factory=SemanticMap)
+    lint_issues: list[LintIssue] = field(default_factory=list)
 
 
 @dataclass

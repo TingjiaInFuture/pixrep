@@ -42,6 +42,8 @@ This approach enables an Agentic workflow: *Read the Index -> Identify relevant 
 
 *   **📉 High Efficiency:** Drastically reduces context window usage for large repos.
 *   **🎨 Syntax Highlighting:** Supports 50+ languages (Python, JS, Rust, Go, C++, etc.) with a "One Dark" inspired theme.
+*   **🧠 Semantic Minimap:** Auto-generates per-file micro UML / call graph summaries to expose structure at a glance.
+*   **🔥 Linter Heatmap:** Integrates `ruff` / `eslint` findings and marks risky lines with red/yellow visual overlays.
 *   **🗂️ Hierarchical Output:** Generates a clean `00_INDEX.pdf` summary and separate files for granular access.
 *   **🌏 CJK Support:** Built-in font fallback for Chinese/Japanese/Korean characters (Auto-detects OS fonts).
 *   **🛡️ Smart Filtering:** Respects `.gitignore` patterns and supports custom ignore rules.
@@ -88,6 +90,9 @@ pixcode list . --top-languages 5
 | `--max-size` | Max file size to process (in KB). Files larger than this are skipped. | `512` KB |
 | `--ignore` | Additional glob patterns to ignore (e.g., `*.json` `test/*`). | `[]` |
 | `--index-only` | Generate only the `00_INDEX.pdf` (Directory tree & stats). | `False` |
+| `--disable-semantic-minimap` | Turn off per-file semantic UML/callgraph panel. | `False` |
+| `--disable-lint-heatmap` | Turn off linter-based line heatmap background. | `False` |
+| `--linter-timeout` | Timeout seconds for each linter command. | `20` |
 | `--list-only` | Print the directory tree and stats to console, then exit. | `False` |
 | `-V`, `--version` | Show version information. | - |
 

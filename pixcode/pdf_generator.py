@@ -10,7 +10,8 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak,
 )
 
-from .flowables import CodeBlockChunk, HeaderBar, StatBox
+from .analysis import CodeInsightEngine
+from .flowables import CodeBlockChunk, HeaderBar, SemanticMiniMap, StatBox
 from .fonts import FontRegistry, register_fonts
 from .models import FileInfo, RepoInfo
 from .theme import COLORS
@@ -19,7 +20,10 @@ from .utils import xml_escape
 
 class PDFGenerator:
     def __init__(self, repo: RepoInfo, output_dir: str,
-                 fonts: FontRegistry | None = None):
+                 fonts: FontRegistry | None = None,
+                 enable_semantic_minimap: bool = True,
+                 enable_lint_heatmap: bool = True,
+                 linter_timeout: int = 20):
         self.repo = repo
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -28,11 +32,20 @@ class PDFGenerator:
         self.margin = 15 * mm
         self.content_width = self.page_width - 2 * self.margin
         self.avail_height = self.page_height - self.margin - 15 * mm
+        self.enable_semantic_minimap = enable_semantic_minimap
+        self.enable_lint_heatmap = enable_lint_heatmap
+        self.insight_engine = CodeInsightEngine(
+            repo,
+            enable_semantic_minimap=enable_semantic_minimap,
+            enable_lint_heatmap=enable_lint_heatmap,
+            linter_timeout=linter_timeout,
+        )
 
     def generate_all(self):
         print(f"\n📦 Project: {self.repo.name}")
         print(f"   Files: {len(self.repo.files)}, Lines: {self.repo.total_lines:,}")
         print(f"   Output: {self.output_dir}\n")
+        self.insight_engine.enrich_repo()
         self._generate_index_pdf()
         for info in self.repo.files:
             self._generate_file_pdf(info)
@@ -235,16 +248,39 @@ class PDFGenerator:
             f"<b>Size:</b> {self._fmt_size(file_info.size)}",
         ]:
             story.append(Paragraph(item, meta))
+
+        if self.enable_semantic_minimap:
+            stats = (
+                f"<b>Semantic Map:</b> {xml_escape(file_info.semantic_map.kind)} "
+                f"({file_info.semantic_map.node_count} nodes / "
+                f"{file_info.semantic_map.edge_count} edges)"
+            )
+            story.append(Paragraph(stats, meta))
+
+        lint_counts = self._lint_counts(file_info)
+        if self.enable_lint_heatmap:
+            story.append(Paragraph(
+                f"<b>Linter:</b> {lint_counts['high']} high / "
+                f"{lint_counts['medium']} medium findings",
+                meta,
+            ))
+
         story.append(Spacer(1, 4 * mm))
 
+        if self.enable_semantic_minimap:
+            story.append(SemanticMiniMap(file_info.semantic_map, fonts=self.fonts, width=cw))
+            story.append(Spacer(1, 4 * mm))
+
         all_lines = file_info.content.split("\n")
-        first_page_used = 28 + 4 * mm + 4 * 14 + 4 * mm + 10
+        first_page_used = 28 + 4 * mm + 6 * 14 + 8 * mm + 50
         first_avail = self.avail_height - first_page_used
         later_avail = self.avail_height - 10
 
+        line_heat = self._line_heat_map(file_info) if self.enable_lint_heatmap else {}
         self._add_code_chunks(story, all_lines, file_info.language, cw,
                               first_avail=first_avail,
-                              later_avail=later_avail)
+                              later_avail=later_avail,
+                              line_heat=line_heat)
 
         doc.build(story,
                   onFirstPage=self._page_footer,
@@ -252,7 +288,8 @@ class PDFGenerator:
         print(f"  📄 {pdf_name} ({file_info.line_count} lines)")
 
     def _add_code_chunks(self, story, all_lines, language, width,
-                         first_avail, later_avail, font_size=6.5):
+                         first_avail, later_avail, font_size=6.5,
+                         line_heat: dict[int, str] | None = None):
         offset = 0
         first_chunk = True
         while offset < len(all_lines):
@@ -265,6 +302,7 @@ class PDFGenerator:
                 fonts=self.fonts,
                 start_line=offset + 1,
                 width=width, font_size=font_size,
+                line_heat=line_heat,
             ))
 
             offset += n
@@ -276,6 +314,27 @@ class PDFGenerator:
         safe_path = str(info.path).replace("/", "_").replace("\\", "_")
         safe_path = re.sub(r"[^\w\-_.]", "_", safe_path)
         return f"{info.index:03d}_{safe_path}.pdf"
+
+    @staticmethod
+    def _line_heat_map(info: FileInfo) -> dict[int, str]:
+        line_map: dict[int, str] = {}
+        for issue in info.lint_issues:
+            if issue.line < 1:
+                continue
+            current = line_map.get(issue.line)
+            if current == "high":
+                continue
+            if issue.severity == "high":
+                line_map[issue.line] = "high"
+            elif current is None:
+                line_map[issue.line] = "medium"
+        return line_map
+
+    @staticmethod
+    def _lint_counts(info: FileInfo) -> dict[str, int]:
+        high = sum(1 for issue in info.lint_issues if issue.severity == "high")
+        medium = sum(1 for issue in info.lint_issues if issue.severity != "high")
+        return {"high": high, "medium": medium}
 
     @staticmethod
     def _fmt_size(size: int) -> str:

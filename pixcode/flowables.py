@@ -6,6 +6,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus.flowables import Flowable
 
 from .fonts import FontRegistry
+from .models import SemanticMap
 from .syntax import BUILTIN_FUNCTIONS, COMMENT_STYLES, KEYWORDS
 from .theme import COLORS
 from .utils import str_width, truncate_to_width
@@ -20,7 +21,8 @@ class CodeBlockChunk(Flowable):
     def __init__(self, lines: list[str], language: str,
                  fonts: FontRegistry,
                  start_line: int = 1, width: float | None = None,
-                 font_size: float = 6.5):
+                 font_size: float = 6.5,
+                 line_heat: dict[int, str] | None = None):
         super().__init__()
         self.code_lines = lines
         self.language = language
@@ -30,6 +32,7 @@ class CodeBlockChunk(Flowable):
         self.line_height = font_size * 1.6
         self.padding = 6
         self.fonts = fonts
+        self.line_heat = line_heat or {}
 
         self.kw_set = KEYWORDS.get(language, set())
         self.builtin_set = BUILTIN_FUNCTIONS.get(language, set())
@@ -65,6 +68,11 @@ class CodeBlockChunk(Flowable):
 
         for i, line in enumerate(self.code_lines):
             line_no = self.start_line + i
+            level = self.line_heat.get(line_no)
+            if level:
+                canv.setFillColor(COLORS["heat_high"] if level == "high" else COLORS["heat_medium"])
+                canv.rect(line_no_width, y - 2, self.block_width - line_no_width, self.line_height, fill=1, stroke=0)
+
             canv.setFont("Courier", self.font_size)
             canv.setFillColor(COLORS["line_no"])
             canv.drawRightString(line_no_width - 6, y, str(line_no))
@@ -128,6 +136,47 @@ class CodeBlockChunk(Flowable):
             canv.setFont(font, fs)
             canv.drawString(cur_x, y, token)
             cur_x += str_width(token, fs)
+
+
+class SemanticMiniMap(Flowable):
+    def __init__(self, semantic_map: SemanticMap, fonts: FontRegistry, width: float | None = None):
+        super().__init__()
+        self.semantic_map = semantic_map
+        self.fonts = fonts
+        self.map_width = width or (A4[0] - 30 * mm)
+        self.padding = 6
+        self.line_height = 9
+        self.title_height = 14
+
+    def wrap(self, availWidth, availHeight):
+        self.map_width = min(self.map_width, availWidth)
+        rows = max(1, len(self.semantic_map.lines))
+        total_h = self.title_height + rows * self.line_height + self.padding * 2
+        return (self.map_width, total_h)
+
+    def draw(self):
+        canv = self.canv
+        rows = max(1, len(self.semantic_map.lines))
+        total_h = self.title_height + rows * self.line_height + self.padding * 2
+
+        canv.setFillColor(COLORS["bg_light"])
+        canv.roundRect(0, 0, self.map_width, total_h, 4, fill=1, stroke=0)
+
+        canv.setFillColor(COLORS["header_bg"])
+        canv.roundRect(0, total_h - self.title_height - self.padding, self.map_width, self.title_height + self.padding, 4, fill=1, stroke=0)
+
+        canv.setFont(self.fonts.bold, 8)
+        canv.setFillColor(COLORS["white"])
+        title = "Semantic Minimap"
+        kind = self.semantic_map.kind.upper()
+        canv.drawString(8, total_h - self.title_height, f"{title}  [{kind}]")
+
+        y = total_h - self.title_height - self.padding - self.line_height + 2
+        canv.setFont(self.fonts.mono, 7)
+        canv.setFillColor(COLORS["fg"])
+        for line in self.semantic_map.lines[:16]:
+            canv.drawString(8, y, truncate_to_width(line, 7, self.map_width - 16))
+            y -= self.line_height
 
 
 class HeaderBar(Flowable):

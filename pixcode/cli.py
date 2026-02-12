@@ -70,6 +70,23 @@ Examples:
         help="Generate only 00_INDEX.pdf / 仅生成索引 PDF",
     )
     generate_parser.add_argument(
+        "--disable-semantic-minimap",
+        action="store_true",
+        help="Disable semantic UML/callgraph blocks / 关闭语义微缩图",
+    )
+    generate_parser.add_argument(
+        "--disable-lint-heatmap",
+        action="store_true",
+        help="Disable linter severity background heatmap / 关闭 linter 热力图",
+    )
+    generate_parser.add_argument(
+        "--linter-timeout",
+        type=int,
+        default=20,
+        metavar="SECONDS",
+        help="Timeout for each linter command (default: 20) / 单次 linter 超时",
+    )
+    generate_parser.add_argument(
         "--list-only", action="store_true",
         help=argparse.SUPPRESS,
     )
@@ -181,7 +198,13 @@ def _run_generate(args: argparse.Namespace) -> int:
         return 0
 
     output_dir = args.output or f"./pixcode_output/{repo.name}"
-    generator = PDFGenerator(repo, output_dir)
+    generator = PDFGenerator(
+        repo,
+        output_dir,
+        enable_semantic_minimap=not args.disable_semantic_minimap,
+        enable_lint_heatmap=not args.disable_lint_heatmap,
+        linter_timeout=args.linter_timeout,
+    )
     if args.index_only:
         generator._generate_index_pdf()  # pylint: disable=protected-access
         print("\nDone! Generated 1 PDF")
