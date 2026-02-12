@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .pdf_generator import PDFGenerator
 from .scanner import RepoScanner
+from .onepdf import pack_repo_to_one_pdf
 from .version import __version__
 
 
@@ -113,14 +114,79 @@ Examples:
     help_parser.add_argument(
         "topic",
         nargs="?",
-        choices=["generate", "list"],
+        choices=["generate", "list", "onepdf", "allinone"],
         help="Command name / 命令名",
+    )
+
+    def _add_onepdf_parser(name: str, help_text: str) -> argparse.ArgumentParser:
+        p = subparsers.add_parser(
+            name,
+            parents=[common],
+            help=help_text,
+            formatter_class=argparse.RawTextHelpFormatter,
+        )
+        p.add_argument(
+            "-o",
+            "--output",
+            default=None,
+            help="Output PDF path (default: ./pixcode_output/<repo>/ONEPDF_CORE.pdf) / 输出 PDF 路径",
+        )
+        p.add_argument(
+            "--no-core-only",
+            action="store_true",
+            help="Include non-core files (docs/tests) / 也包含非核心文件（文档/测试）",
+        )
+        p.add_argument(
+            "--no-git",
+            action="store_true",
+            help="Do not prefer git ls-files (fallback to walking) / 不优先使用 git ls-files",
+        )
+        p.add_argument(
+            "--include",
+            nargs="*",
+            default=[],
+            metavar="PATTERN",
+            help="Only include paths matching these patterns / 仅包含匹配这些规则的路径",
+        )
+        p.add_argument(
+            "--cols",
+            type=int,
+            default=120,
+            metavar="N",
+            help="Max columns per line for wrapping (default: 120) / 自动换行列数",
+        )
+        p.add_argument(
+            "--no-wrap",
+            action="store_true",
+            help="Disable line wrapping / 禁用自动换行",
+        )
+        p.add_argument(
+            "--no-tree",
+            action="store_true",
+            help="Do not include directory tree section / 不包含目录树",
+        )
+        p.add_argument(
+            "--no-index",
+            action="store_true",
+            help="Do not include file index section / 不包含文件索引",
+        )
+        return p
+
+    onepdf_parser = _add_onepdf_parser(
+        "onepdf",
+        "Pack core code into a single minimized PDF / 核心代码一键打包成单个极简 PDF",
+    )
+    allinone_parser = _add_onepdf_parser(
+        "allinone",
+        "Alias of onepdf / onepdf 的别名",
     )
 
     commands = {
         "generate": generate_parser,
         "list": list_parser,
         "help": help_parser,
+        "onepdf": onepdf_parser,
+        "allinone": allinone_parser,
     }
     return parser, commands
 
@@ -129,7 +195,7 @@ def _normalize_legacy_args(argv: list[str]) -> list[str]:
     if not argv:
         return ["generate"]
 
-    known_commands = {"generate", "list", "help"}
+    known_commands = {"generate", "list", "help", "onepdf", "allinone"}
     first = argv[0]
     if first in known_commands:
         return argv
@@ -233,6 +299,44 @@ def _run_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_onepdf(args: argparse.Namespace) -> int:
+    repo_path = Path(args.repo).resolve()
+    if not repo_path.is_dir():
+        print(f"Error: '{args.repo}' is not a directory")
+        return 1
+
+    out_pdf = args.output
+    if not out_pdf:
+        out_pdf = f"./pixcode_output/{repo_path.name}/ONEPDF_CORE.pdf"
+
+    stats = pack_repo_to_one_pdf(
+        repo_root=repo_path,
+        out_pdf=Path(out_pdf),
+        max_file_size=args.max_size * 1024,
+        extra_ignore=args.ignore,
+        core_only=not args.no_core_only,
+        prefer_git=not args.no_git,
+        include_patterns=args.include,
+        max_cols=args.cols,
+        wrap=not args.no_wrap,
+        include_tree=not args.no_tree,
+        include_index=not args.no_index,
+    )
+    print(
+        "onepdf summary: "
+        f"seen={stats.get('seen_files', 0)}, "
+        f"included={stats.get('included', 0)}, "
+        f"ignored={stats.get('ignored_by_pattern', 0)}, "
+        f"size/empty={stats.get('skipped_size_or_empty', 0)}, "
+        f"binary={stats.get('skipped_binary', 0)}, "
+        f"errors={stats.get('skipped_unreadable', 0)}, "
+        f"pages={stats.get('pages', 0)}, "
+        f"output={stats.get('output_bytes', 0)} bytes"
+    )
+    print(f"PDF: {Path(out_pdf).resolve()}")
+    return 0
+
+
 def _run_help(
     args: argparse.Namespace,
     parser: argparse.ArgumentParser,
@@ -252,6 +356,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "list":
         return _run_list(args)
+    if args.command in {"onepdf", "allinone"}:
+        return _run_onepdf(args)
     if args.command == "help":
         return _run_help(args, parser, commands)
     return _run_generate(args)

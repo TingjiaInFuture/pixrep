@@ -73,6 +73,14 @@ pixcode .
 pixcode generate /path/to/my-project -o ./my-project-pdfs
 ```
 
+**Pack core code into a single minimized PDF (all-in-one):**
+```bash
+pixcode onepdf /path/to/my-project -o ./ONEPDF_CORE.pdf
+```
+Notes:
+* Defaults to `git ls-files` (tracked files) when available.
+* Defaults to "core-only" filtering (skips docs/tests); use `--no-core-only` to include them.
+
 **Preview structure and stats (without generating PDFs):**
 ```bash
 pixcode list /path/to/my-project

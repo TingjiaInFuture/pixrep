@@ -161,7 +161,16 @@ class PDFGenerator:
         story.append(HeaderBar("Directory Structure", fonts=self.fonts, width=cw))
         story.append(Spacer(1, 3 * mm))
 
-        tree_lines = self.repo.tree_str.split("\n")
+        # Use ASCII tree connectors to avoid missing glyphs in fallback fonts.
+        tree_str = (
+            self.repo.tree_str
+            .replace("├── ", "|-- ")
+            .replace("└── ", "`-- ")
+            .replace("│   ", "|   ")
+            .replace("─", "-")
+            .replace("│", "|")
+        )
+        tree_lines = tree_str.split("\n")
         if len(tree_lines) > 120:
             tree_lines = tree_lines[:120] + [
                 f"  ... ({len(tree_lines)} entries total)"]
