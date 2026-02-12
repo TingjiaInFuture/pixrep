@@ -8,6 +8,17 @@ from pathlib import Path
 
 from .models import FileInfo, LintIssue, RepoInfo, SemanticMap
 
+JS_CLASS_PAT = re.compile(
+    r"^\s*class\s+([A-Za-z_]\w*)(?:\s+extends\s+([A-Za-z_]\w*))?",
+    re.MULTILINE,
+)
+JS_FN_PATS = (
+    re.compile(r"^\s*function\s+([A-Za-z_]\w*)\s*\(", re.MULTILINE),
+    re.compile(r"^\s*const\s+([A-Za-z_]\w*)\s*=\s*\([^)]*\)\s*=>", re.MULTILINE),
+    re.compile(r"^\s*([A-Za-z_]\w*)\s*:\s*function\s*\(", re.MULTILINE),
+)
+JS_CALL_PAT = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+
 
 class CodeInsightEngine:
     def __init__(
@@ -190,25 +201,19 @@ class CodeInsightEngine:
         )
 
     def _js_semantic_map(self, content: str) -> SemanticMap:
-        class_pat = re.compile(r"^\s*class\s+([A-Za-z_]\w*)(?:\s+extends\s+([A-Za-z_]\w*))?", re.MULTILINE)
-        fn_pats = [
-            re.compile(r"^\s*function\s+([A-Za-z_]\w*)\s*\(", re.MULTILINE),
-            re.compile(r"^\s*const\s+([A-Za-z_]\w*)\s*=\s*\([^)]*\)\s*=>", re.MULTILINE),
-            re.compile(r"^\s*([A-Za-z_]\w*)\s*:\s*function\s*\(", re.MULTILINE),
-        ]
-
-        classes = class_pat.findall(content)
+        classes = JS_CLASS_PAT.findall(content)
         funcs: set[str] = set()
-        for pat in fn_pats:
+        for pat in JS_FN_PATS:
             funcs.update(pat.findall(content))
 
-        calls = re.findall(r"\b([A-Za-z_]\w*)\s*\(", content)
+        calls = JS_CALL_PAT.findall(content)
         call_edges: set[tuple[str, str]] = set()
         sorted_funcs = sorted(funcs)
+        call_candidates = [name for name in calls[:200] if name in funcs]
         if sorted_funcs:
             for src in sorted_funcs[:8]:
-                for callee in calls[:200]:
-                    if callee in funcs and callee != src:
+                for callee in call_candidates:
+                    if callee != src:
                         call_edges.add((src, callee))
                         if len(call_edges) >= 12:
                             break

@@ -1,3 +1,6 @@
+from functools import lru_cache
+
+
 def xml_escape(text: str) -> str:
     return (text
             .replace("&", "&amp;")
@@ -7,6 +10,7 @@ def xml_escape(text: str) -> str:
             .replace("'", "&#39;"))
 
 
+@lru_cache(maxsize=8192)
 def char_width(char: str, font_size: float) -> float:
     """
     估算单个字符的渲染宽度。
@@ -23,6 +27,7 @@ def char_width(char: str, font_size: float) -> float:
     return font_size * 0.6
 
 
+@lru_cache(maxsize=32768)
 def str_width(text: str, font_size: float) -> float:
     """估算字符串的渲染宽度"""
     return sum(char_width(c, font_size) for c in text)

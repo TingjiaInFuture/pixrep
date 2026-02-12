@@ -147,7 +147,7 @@ def _normalize_legacy_args(argv: list[str]) -> list[str]:
     return ["generate", *argv]
 
 
-def _scan_repo(args: argparse.Namespace):
+def _scan_repo(args: argparse.Namespace, include_content: bool = True):
     repo_path = Path(args.repo).resolve()
     if not repo_path.is_dir():
         print(f"Error: '{args.repo}' is not a directory")
@@ -159,10 +159,20 @@ def _scan_repo(args: argparse.Namespace):
         max_file_size=args.max_size * 1024,
         extra_ignore=args.ignore,
     )
-    repo = scanner.scan()
+    repo = scanner.scan(include_content=include_content)
     if not repo.files:
         print("No files found.")
         return repo, 0
+    stats = repo.scan_stats
+    print(
+        "Scan summary: "
+        f"seen={stats.get('seen_files', 0)}, "
+        f"loaded={len(repo.files)}, "
+        f"ignored={stats.get('ignored_by_pattern', 0)}, "
+        f"size/empty={stats.get('skipped_size_or_empty', 0)}, "
+        f"binary={stats.get('skipped_binary', 0)}, "
+        f"errors={stats.get('skipped_unreadable', 0)}"
+    )
     return repo, 0
 
 
@@ -189,7 +199,8 @@ def _print_repo_list(repo, top_languages: int = 0):
 
 
 def _run_generate(args: argparse.Namespace) -> int:
-    repo, code = _scan_repo(args)
+    include_content = not (args.index_only or args.list_only)
+    repo, code = _scan_repo(args, include_content=include_content)
     if code != 0 or repo is None or not repo.files:
         return code
 
@@ -215,7 +226,7 @@ def _run_generate(args: argparse.Namespace) -> int:
 
 
 def _run_list(args: argparse.Namespace) -> int:
-    repo, code = _scan_repo(args)
+    repo, code = _scan_repo(args, include_content=False)
     if code != 0 or repo is None or not repo.files:
         return code
     _print_repo_list(repo, top_languages=args.top_languages)

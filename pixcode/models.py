@@ -41,3 +41,4 @@ class RepoInfo:
     total_size: int = 0
     language_stats: dict = field(default_factory=dict)
     tree_str: str = ""
+    scan_stats: dict[str, int] = field(default_factory=dict)

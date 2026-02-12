@@ -41,6 +41,7 @@ This approach enables an Agentic workflow: *Read the Index -> Identify relevant 
 ## ✨ Features
 
 *   **📉 High Efficiency:** Drastically reduces context window usage for large repos.
+*   **⚡ Faster Scanning:** Single-pass file loading (binary check + line count + optional content decode) to reduce I/O overhead.
 *   **🎨 Syntax Highlighting:** Supports 50+ languages (Python, JS, Rust, Go, C++, etc.) with a "One Dark" inspired theme.
 *   **🧠 Semantic Minimap:** Auto-generates per-file micro UML / call graph summaries to expose structure at a glance.
 *   **🔥 Linter Heatmap:** Integrates `ruff` / `eslint` findings and marks risky lines with red/yellow visual overlays.
@@ -48,6 +49,7 @@ This approach enables an Agentic workflow: *Read the Index -> Identify relevant 
 *   **🌏 CJK Support:** Built-in font fallback for Chinese/Japanese/Korean characters (Auto-detects OS fonts).
 *   **🛡️ Smart Filtering:** Respects `.gitignore` patterns and supports custom ignore rules.
 *   **📊 Insightful Stats:** Calculates line counts and language distribution automatically.
+*   **🧾 Scan Diagnostics:** Prints scan summary (`seen/loaded/ignored/binary/errors`) for faster troubleshooting.
 
 ## 📦 Installation
 
@@ -75,6 +77,7 @@ pixcode generate /path/to/my-project -o ./my-project-pdfs
 ```bash
 pixcode list /path/to/my-project
 ```
+`list` mode now uses lightweight scanning (no file content decode), so large repos respond significantly faster.
 
 **Show only top 5 languages in the summary:**
 ```bash
@@ -95,6 +98,17 @@ pixcode list . --top-languages 5
 | `--linter-timeout` | Timeout seconds for each linter command. | `20` |
 | `--list-only` | Print the directory tree and stats to console, then exit. | `False` |
 | `-V`, `--version` | Show version information. | - |
+
+## ⚙️ Performance Notes
+
+`pixcode` now applies two execution paths:
+
+1. **Light scan path** (`pixcode list`, `pixcode generate --index-only`, `--list-only`):
+   only metadata and line counts are collected; file content is not loaded.
+2. **Full scan path** (regular `pixcode generate`):
+   file content is decoded only when needed for PDF rendering.
+
+This reduces memory pressure and disk I/O for repository exploration workflows.
 
 ## 📂 Output Structure
 
