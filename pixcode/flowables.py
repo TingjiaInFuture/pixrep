@@ -37,6 +37,49 @@ class CodeBlockChunk(Flowable):
         self.kw_set = KEYWORDS.get(language, set())
         self.builtin_set = BUILTIN_FUNCTIONS.get(language, set())
         self.line_comment = COMMENT_STYLES.get(language)
+        self._ml_string_mask = self._compute_multiline_string_mask()
+
+    def _compute_multiline_string_mask(self) -> list[bool]:
+        """
+        Best-effort multiline string/comment masking.
+
+        This is intentionally heuristic: we avoid expensive parsing but prevent
+        obvious false highlighting in long blocks.
+        """
+        mask: list[bool] = []
+        in_ml = False
+        if self.language == "python":
+            for line in self.code_lines:
+                mask.append(in_ml)
+                # Toggle on odd number of triple quotes.
+                toggles = (line.count("'''") + line.count('"""')) % 2
+                if toggles:
+                    # The line with the delimiter is part of the string region.
+                    mask[-1] = True
+                    in_ml = not in_ml
+            return mask
+
+        if self.language in {"javascript", "typescript"}:
+            for line in self.code_lines:
+                mask.append(in_ml)
+                # Toggle on unescaped backticks.
+                n = 0
+                esc = False
+                for ch in line:
+                    if esc:
+                        esc = False
+                        continue
+                    if ch == "\\":
+                        esc = True
+                        continue
+                    if ch == "`":
+                        n += 1
+                if n % 2:
+                    mask[-1] = True
+                    in_ml = not in_ml
+            return mask
+
+        return [False] * len(self.code_lines)
 
     def wrap(self, availWidth, availHeight):
         self.block_width = min(self.block_width, availWidth)
@@ -52,7 +95,11 @@ class CodeBlockChunk(Flowable):
         canv.roundRect(0, 0, self.block_width, total_h, 4, fill=1, stroke=0)
 
         max_no = self.start_line + num_lines
-        line_no_width = max(35, len(str(max_no)) * 7 + 14)
+        # Heuristic sizing: line numbers are rendered using monospace; keep a minimum gutter.
+        min_gutter = 35
+        digit_width = 7
+        padding = 14
+        line_no_width = max(min_gutter, len(str(max_no)) * digit_width + padding)
 
         canv.setFillColor(COLORS["header_bg"])
         canv.roundRect(0, 0, line_no_width, total_h, 4, fill=1, stroke=0)
@@ -78,12 +125,18 @@ class CodeBlockChunk(Flowable):
             canv.drawRightString(line_no_width - 6, y, str(line_no))
 
             display = truncate_to_width(line, self.font_size, code_area_width)
-            self._draw_line(canv, code_x, y, display)
+            self._draw_line(canv, code_x, y, display, in_multiline_string=self._ml_string_mask[i])
             y -= self.line_height
 
-    def _draw_line(self, canv, x, y, line):
+    def _draw_line(self, canv, x, y, line, in_multiline_string: bool = False):
         fs = self.font_size
         stripped = line.lstrip()
+
+        if in_multiline_string:
+            canv.setFont(self.fonts.mono, fs)
+            canv.setFillColor(COLORS["string"])
+            canv.drawString(x, y, line)
+            return
 
         if self.line_comment and stripped.startswith(self.line_comment):
             canv.setFont(self.fonts.mono, fs)
@@ -103,39 +156,124 @@ class CodeBlockChunk(Flowable):
             canv.drawString(x, y, line)
             return
 
-        tokens = re.split(r"(\s+)", line)
+        segments = self._split_line_segments(line)
         cur_x = x
 
-        for token in tokens:
-            if not token:
+        for seg_text, seg_kind in segments:
+            if not seg_text:
                 continue
-            if token.isspace():
+            if seg_text.isspace():
+                cur_x += str_width(seg_text, fs)
+                continue
+
+            if seg_kind == "comment":
+                canv.setFont(self.fonts.mono, fs)
+                canv.setFillColor(COLORS["comment"])
+                canv.drawString(cur_x, y, seg_text)
+                cur_x += str_width(seg_text, fs)
+                continue
+
+            if seg_kind == "string":
+                canv.setFont(self.fonts.mono, fs)
+                canv.setFillColor(COLORS["string"])
+                canv.drawString(cur_x, y, seg_text)
+                cur_x += str_width(seg_text, fs)
+                continue
+
+            # code segment: keep whitespace as-is, but colorize tokens.
+            tokens = re.split(r"(\s+)", seg_text)
+            for token in tokens:
+                if not token:
+                    continue
+                if token.isspace():
+                    cur_x += str_width(token, fs)
+                    continue
+
+                color = COLORS["fg"]
+                bold = False
+
+                word = re.sub(r"^[^\w]*|[^\w]*$", "", token)
+
+                if word in self.kw_set:
+                    color = COLORS["keyword"]
+                    bold = True
+                elif word in self.builtin_set:
+                    color = COLORS["type"]
+                elif self.language == "python" and word in ("self", "cls"):
+                    color = COLORS["red"]
+                elif re.match(r"^\d+\.?\d*$", word):
+                    color = COLORS["number"]
+
+                canv.setFillColor(color)
+                font = self.fonts.mono_bold if bold else self.fonts.mono
+                canv.setFont(font, fs)
+                canv.drawString(cur_x, y, token)
                 cur_x += str_width(token, fs)
+
+    def _split_line_segments(self, line: str) -> list[tuple[str, str]]:
+        """
+        Split a line into (text, kind) segments where kind is one of:
+        - "code"
+        - "string"
+        - "comment"
+        """
+        comment = self.line_comment
+        out: list[tuple[str, str]] = []
+        buf: list[str] = []
+        kind = "code"
+        quote: str | None = None
+        esc = False
+
+        def flush():
+            nonlocal buf
+            if buf:
+                out.append(("".join(buf), kind))
+                buf = []
+
+        i = 0
+        while i < len(line):
+            ch = line[i]
+
+            if kind == "code" and comment and quote is None:
+                # Start of line comment (outside any string).
+                if line.startswith(comment, i):
+                    flush()
+                    out.append((line[i:], "comment"))
+                    return out
+
+            if kind == "code":
+                if ch in ('"', "'", "`"):
+                    flush()
+                    kind = "string"
+                    quote = ch
+                    buf.append(ch)
+                    esc = False
+                    i += 1
+                    continue
+                buf.append(ch)
+                i += 1
                 continue
 
-            color = COLORS["fg"]
-            bold = False
+            # string
+            if esc:
+                buf.append(ch)
+                esc = False
+                i += 1
+                continue
+            if ch == "\\":
+                buf.append(ch)
+                esc = True
+                i += 1
+                continue
+            buf.append(ch)
+            i += 1
+            if quote and ch == quote:
+                flush()
+                kind = "code"
+                quote = None
 
-            word = re.sub(r"^[^\w]*|[^\w]*$", "", token)
-
-            if word in self.kw_set:
-                color = COLORS["keyword"]
-                bold = True
-            elif word in self.builtin_set:
-                color = COLORS["type"]
-            elif self.language == "python" and word in ("self", "cls"):
-                color = COLORS["red"]
-            elif re.match(r"^\d+\.?\d*$", word):
-                color = COLORS["number"]
-            elif any(token.startswith(c) for c in
-                     ('"', "'", "`", 'f"', "f'", 'r"', "r'", 'b"', "b'")):
-                color = COLORS["string"]
-
-            canv.setFillColor(color)
-            font = self.fonts.mono_bold if bold else self.fonts.mono
-            canv.setFont(font, fs)
-            canv.drawString(cur_x, y, token)
-            cur_x += str_width(token, fs)
+        flush()
+        return out
 
 
 class SemanticMiniMap(Flowable):

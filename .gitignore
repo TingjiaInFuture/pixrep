@@ -14,3 +14,7 @@ pixcode_output/
 dist/
 build/
 *.egg-info/
+
+.tmp_tests/
+.test_scratch/
+.tmp_py/

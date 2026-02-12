@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from pathlib import Path
 import re
@@ -16,6 +17,9 @@ from .fonts import FontRegistry, register_fonts
 from .models import FileInfo, RepoInfo
 from .theme import COLORS
 from .utils import xml_escape
+
+
+log = logging.getLogger(__name__)
 
 
 class PDFGenerator:
@@ -42,14 +46,23 @@ class PDFGenerator:
         )
 
     def generate_all(self):
-        print(f"\n📦 Project: {self.repo.name}")
-        print(f"   Files: {len(self.repo.files)}, Lines: {self.repo.total_lines:,}")
-        print(f"   Output: {self.output_dir}\n")
+        """Generate index PDF and one PDF per file into output_dir."""
+        log.info("")
+        log.info("Project: %s", self.repo.name)
+        log.info("Files: %d, Lines: %d", len(self.repo.files), self.repo.total_lines)
+        log.info("Output: %s", self.output_dir)
+        log.info("")
         self.insight_engine.enrich_repo()
         self._generate_index_pdf()
         for info in self.repo.files:
             self._generate_file_pdf(info)
-        print(f"\n✅ Done! Generated {len(self.repo.files) + 1} PDFs")
+        log.info("")
+        log.info("Done! Generated %d PDFs", len(self.repo.files) + 1)
+
+    def generate_index_only(self) -> None:
+        """Generate only `00_INDEX.pdf` into output_dir."""
+        self.insight_engine.enrich_repo()
+        self._generate_index_pdf()
 
     def _page_footer(self, canvas, doc):
         canvas.saveState()
@@ -230,7 +243,7 @@ class PDFGenerator:
         doc.build(story,
                   onFirstPage=self._page_footer,
                   onLaterPages=self._page_footer)
-        print(f"  📄 00_INDEX.pdf ({len(self.repo.files)} files indexed)")
+        log.info("  00_INDEX.pdf (%d files indexed)", len(self.repo.files))
 
     def _generate_file_pdf(self, file_info: FileInfo):
         pdf_name = self._file_pdf_name(file_info)
@@ -281,7 +294,13 @@ class PDFGenerator:
             story.append(Spacer(1, 4 * mm))
 
         all_lines = file_info.content.split("\n")
-        first_page_used = 28 + 4 * mm + 6 * 14 + 8 * mm + 50
+        # Rough budget for header + metadata blocks on the first page before code starts.
+        # This doesn't need to be exact; it's a layout heuristic.
+        header_budget = 28
+        spacing_budget = 4 * mm + 8 * mm
+        meta_lines_budget = 6 * 14
+        minimap_budget = 50
+        first_page_used = header_budget + spacing_budget + meta_lines_budget + minimap_budget
         first_avail = self.avail_height - first_page_used
         later_avail = self.avail_height - 10
 
@@ -294,7 +313,7 @@ class PDFGenerator:
         doc.build(story,
                   onFirstPage=self._page_footer,
                   onLaterPages=self._page_footer)
-        print(f"  📄 {pdf_name} ({file_info.line_count} lines)")
+        log.info("  %s (%d lines)", pdf_name, file_info.line_count)
 
     def _add_code_chunks(self, story, all_lines, language, width,
                          first_avail, later_avail, font_size=6.5,

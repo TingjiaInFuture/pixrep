@@ -28,9 +28,20 @@ def char_width(char: str, font_size: float) -> float:
 
 
 @lru_cache(maxsize=32768)
-def str_width(text: str, font_size: float) -> float:
-    """估算字符串的渲染宽度"""
+def _str_width_cached(text: str, font_size: float) -> float:
     return sum(char_width(c, font_size) for c in text)
+
+
+def str_width(text: str, font_size: float) -> float:
+    """
+    估算字符串的渲染宽度。
+
+    Note: caching full strings can create memory pressure for huge files.
+    We only cache "short" strings; long strings are computed directly.
+    """
+    if len(text) > 256:
+        return sum(char_width(c, font_size) for c in text)
+    return _str_width_cached(text, font_size)
 
 
 def truncate_to_width(text: str, font_size: float, max_width: float) -> str:

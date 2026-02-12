@@ -1,5 +1,6 @@
 import ast
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -19,6 +20,8 @@ JS_FN_PATS = (
 )
 JS_CALL_PAT = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
 
+log = logging.getLogger(__name__)
+
 
 class CodeInsightEngine:
     def __init__(
@@ -34,6 +37,7 @@ class CodeInsightEngine:
         self.linter_timeout = linter_timeout
 
     def enrich_repo(self):
+        """Populate semantic maps and lint issues onto RepoInfo.file entries."""
         lint_map = self._collect_lint_issues() if self.enable_lint_heatmap else {}
         for info in self.repo.files:
             info.semantic_map = (
@@ -61,6 +65,7 @@ class CodeInsightEngine:
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
+            log.debug("ruff invocation failed or timed out")
             return
         payload = proc.stdout.strip()
         if not payload:
@@ -68,6 +73,7 @@ class CodeInsightEngine:
         try:
             data = json.loads(payload)
         except json.JSONDecodeError:
+            log.debug("ruff output was not valid json")
             return
         for item in data:
             filename = item.get("filename")
@@ -109,6 +115,7 @@ class CodeInsightEngine:
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
+            log.debug("eslint invocation failed or timed out")
             return
         payload = proc.stdout.strip()
         if not payload:
@@ -116,6 +123,7 @@ class CodeInsightEngine:
         try:
             files = json.loads(payload)
         except json.JSONDecodeError:
+            log.debug("eslint output was not valid json")
             return
         for entry in files:
             rel = self._relative_to_repo(entry.get("filePath", ""))
@@ -202,23 +210,20 @@ class CodeInsightEngine:
 
     def _js_semantic_map(self, content: str) -> SemanticMap:
         classes = JS_CLASS_PAT.findall(content)
-        funcs: set[str] = set()
-        for pat in JS_FN_PATS:
-            funcs.update(pat.findall(content))
+        func_spans = self._js_function_spans(content)
+        funcs = {name for name, _, _ in func_spans}
 
-        calls = JS_CALL_PAT.findall(content)
         call_edges: set[tuple[str, str]] = set()
-        sorted_funcs = sorted(funcs)
-        call_candidates = [name for name in calls[:200] if name in funcs]
-        if sorted_funcs:
-            for src in sorted_funcs[:8]:
-                for callee in call_candidates:
-                    if callee != src:
-                        call_edges.add((src, callee))
-                        if len(call_edges) >= 12:
-                            break
-                if len(call_edges) >= 12:
-                    break
+        max_edges = 16
+        for src, start, end in func_spans[:12]:
+            body = content[start:end]
+            for callee in JS_CALL_PAT.findall(body)[:200]:
+                if callee in funcs and callee != src:
+                    call_edges.add((src, callee))
+                    if len(call_edges) >= max_edges:
+                        break
+            if len(call_edges) >= max_edges:
+                break
 
         lines: list[str] = []
         if classes:
@@ -227,9 +232,9 @@ class CodeInsightEngine:
                 lines.append(f"[Class] {class_name}")
                 if parent:
                     lines.append(f"{class_name} <|-- {parent}")
-        if sorted_funcs:
+        if funcs:
             lines.append("Functions:")
-            for func_name in sorted_funcs[:8]:
+            for func_name in sorted(funcs)[:8]:
                 lines.append(f"  - {func_name}()")
         if call_edges:
             lines.append("Call Graph:")
@@ -263,8 +268,14 @@ class CodeInsightEngine:
         if not path_value:
             return None
         try:
-            path = Path(path_value).resolve()
-            rel = path.relative_to(self.repo.root)
+            root = self.repo.root.resolve()
+            p = Path(path_value)
+            if not p.is_absolute():
+                p = root / p
+            resolved = p.resolve()
+            if not resolved.is_relative_to(root):
+                return None
+            rel = resolved.relative_to(root)
             return self._normalize_path(rel)
         except (ValueError, OSError):
             return None
@@ -280,6 +291,35 @@ class CodeInsightEngine:
         if isinstance(node, ast.Attribute):
             return node.attr
         return ""
+
+    @staticmethod
+    def _js_function_spans(content: str) -> list[tuple[str, int, int]]:
+        """
+        Extract best-effort function spans for JS/TS.
+
+        This is heuristic (regex-based) but provides a much more useful call
+        graph than connecting every call to arbitrary "top N" symbols.
+        """
+        hits: list[tuple[str, int]] = []
+        for pat in JS_FN_PATS:
+            for m in pat.finditer(content):
+                hits.append((m.group(1), m.start()))
+
+        if not hits:
+            return []
+
+        # Deduplicate by name: keep earliest definition.
+        earliest: dict[str, int] = {}
+        for name, pos in hits:
+            if name not in earliest or pos < earliest[name]:
+                earliest[name] = pos
+
+        ordered = sorted(((n, p) for n, p in earliest.items()), key=lambda t: t[1])
+        spans: list[tuple[str, int, int]] = []
+        for idx, (name, start) in enumerate(ordered):
+            end = ordered[idx + 1][1] if idx + 1 < len(ordered) else len(content)
+            spans.append((name, start, end))
+        return spans
 
 
 class _PyCallVisitor(ast.NodeVisitor):

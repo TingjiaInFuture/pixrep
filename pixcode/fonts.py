@@ -1,8 +1,12 @@
 from dataclasses import dataclass
 import os
+import logging
 
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -46,11 +50,11 @@ def register_fonts() -> FontRegistry:
             if font_name == "CJK_Bold" and not registered_bold:
                 pdfmetrics.registerFont(TTFont("CJK_Bold", font_path))
                 registered_bold = True
-                print(f"  🔤 CJK Bold : {font_path}")
+                log.info("  CJK Bold  : %s", font_path)
             elif font_name == "CJK_Normal" and not registered_normal:
                 pdfmetrics.registerFont(TTFont("CJK_Normal", font_path))
                 registered_normal = True
-                print(f"  🔤 CJK Normal: {font_path}")
+                log.info("  CJK Normal: %s", font_path)
                 if not registered_bold:
                     try:
                         pdfmetrics.registerFont(TTFont("CJK_Bold", font_path))
@@ -58,14 +62,14 @@ def register_fonts() -> FontRegistry:
                     except Exception:
                         pass
         except Exception as exc:
-            print(f"  ⚠️  Font registration failed for {font_path}: {exc}")
+            log.warning("  Font registration failed for %s: %s", font_path, exc)
             continue
 
         if registered_normal and registered_bold:
             break
 
     if registered_normal:
-        print("  ✅ All rendering will use CJK font")
+        log.info("  All rendering will use CJK font")
         return FontRegistry(
             normal="CJK_Normal",
             bold="CJK_Bold" if registered_bold else "CJK_Normal",
@@ -73,10 +77,10 @@ def register_fonts() -> FontRegistry:
             mono_bold="CJK_Bold" if registered_bold else "CJK_Normal",
         )
 
-    print("  ⚠️  No CJK font found! Chinese characters will show as □")
-    print("     On Windows: msyh.ttc should exist in C:\\Windows\\Fonts\\")
-    print("     On Linux : apt install fonts-wqy-microhei")
-    print("     On macOS : PingFang should be built-in")
+    log.warning("  No CJK font found. Chinese characters may render as tofu squares.")
+    log.warning("  Windows: msyh.ttc should exist in C:\\Windows\\Fonts\\")
+    log.warning("  Linux  : apt install fonts-wqy-microhei")
+    log.warning("  macOS  : PingFang should be built-in")
     return FontRegistry(
         normal="Helvetica",
         bold="Helvetica-Bold",

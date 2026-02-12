@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pixcode"
-version = "0.1.6"
+dynamic = ["version"]
 description = "Convert code repositories into structured PDF collections for LLM collaboration."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,3 +15,6 @@ pixcode = "pixcode.cli:main"
 
 [tool.setuptools]
 packages = ["pixcode"]
+
+[tool.setuptools.dynamic]
+version = {attr = "pixcode.version.__version__"}

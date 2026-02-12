@@ -1,4 +1,5 @@
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -6,6 +7,9 @@ from .pdf_generator import PDFGenerator
 from .scanner import RepoScanner
 from .onepdf import pack_repo_to_one_pdf
 from .version import __version__
+
+
+log = logging.getLogger(__name__)
 
 
 def _build_common_parser() -> argparse.ArgumentParser:
@@ -29,6 +33,12 @@ def _build_common_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="PATTERN",
         help="Extra ignore patterns, e.g. '*.test.js' / 额外忽略规则",
+    )
+    common.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"],
+        help="Logging level (default: INFO) / 日志级别",
     )
     return common
 
@@ -213,13 +223,23 @@ def _normalize_legacy_args(argv: list[str]) -> list[str]:
     return ["generate", *argv]
 
 
+def _configure_logging(level: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, level.upper(), logging.INFO),
+        format="%(message)s",
+        stream=sys.stdout,
+    )
+    # Keep reportlab quiet unless explicitly debugging.
+    logging.getLogger("reportlab").setLevel(logging.WARNING)
+
+
 def _scan_repo(args: argparse.Namespace, include_content: bool = True):
     repo_path = Path(args.repo).resolve()
     if not repo_path.is_dir():
-        print(f"Error: '{args.repo}' is not a directory")
+        log.error("Error: '%s' is not a directory", args.repo)
         return None, 1
 
-    print(f"Scanning {repo_path}...")
+    log.info("Scanning %s...", repo_path)
     scanner = RepoScanner(
         str(repo_path),
         max_file_size=args.max_size * 1024,
@@ -227,41 +247,44 @@ def _scan_repo(args: argparse.Namespace, include_content: bool = True):
     )
     repo = scanner.scan(include_content=include_content)
     if not repo.files:
-        print("No files found.")
+        log.info("No files found.")
         return repo, 0
     stats = repo.scan_stats
-    print(
-        "Scan summary: "
-        f"seen={stats.get('seen_files', 0)}, "
-        f"loaded={len(repo.files)}, "
-        f"ignored={stats.get('ignored_by_pattern', 0)}, "
-        f"size/empty={stats.get('skipped_size_or_empty', 0)}, "
-        f"binary={stats.get('skipped_binary', 0)}, "
-        f"errors={stats.get('skipped_unreadable', 0)}"
+    log.info(
+        "Scan summary: seen=%d, loaded=%d, ignored=%d, size/empty=%d, binary=%d, errors=%d",
+        stats.get("seen_files", 0),
+        len(repo.files),
+        stats.get("ignored_by_pattern", 0),
+        stats.get("skipped_size_or_empty", 0),
+        stats.get("skipped_binary", 0),
+        stats.get("skipped_unreadable", 0),
     )
     return repo, 0
 
 
 def _print_repo_list(repo, top_languages: int = 0):
-    print(f"\n{repo.name} ({len(repo.files)} files)\n")
-    print(repo.tree_str)
-    print(f"\n{'Language':<15} {'Files':>6} {'Lines':>8}")
-    print("-" * 32)
+    log.info("")
+    log.info("%s (%d files)", repo.name, len(repo.files))
+    log.info("")
+    log.info("%s", repo.tree_str)
+    log.info("")
+    log.info("%-15s %6s %8s", "Language", "Files", "Lines")
+    log.info("%s", "-" * 32)
 
     items = list(repo.language_stats.items())
     if top_languages and top_languages > 0:
         items = items[:top_languages]
 
     for lang, stats in items:
-        print(f"{lang:<15} {stats['files']:>6} {stats['lines']:>8}")
+        log.info("%-15s %6d %8d", lang, stats["files"], stats["lines"])
 
-    print("-" * 32)
+    log.info("%s", "-" * 32)
     shown_lines = sum(stats["lines"] for _, stats in items)
     if top_languages and top_languages > 0 and len(items) < len(repo.language_stats):
-        print(f"{'Shown':<15} {'':>6} {shown_lines:>8}")
-        print(f"{'Total':<15} {len(repo.files):>6} {repo.total_lines:>8}")
+        log.info("%-15s %6s %8d", "Shown", "", shown_lines)
+        log.info("%-15s %6d %8d", "Total", len(repo.files), repo.total_lines)
     else:
-        print(f"{'Total':<15} {len(repo.files):>6} {repo.total_lines:>8}")
+        log.info("%-15s %6d %8d", "Total", len(repo.files), repo.total_lines)
 
 
 def _run_generate(args: argparse.Namespace) -> int:
@@ -283,8 +306,9 @@ def _run_generate(args: argparse.Namespace) -> int:
         linter_timeout=args.linter_timeout,
     )
     if args.index_only:
-        generator._generate_index_pdf()  # pylint: disable=protected-access
-        print("\nDone! Generated 1 PDF")
+        generator.generate_index_only()
+        log.info("")
+        log.info("Done! Generated 1 PDF")
         return 0
 
     generator.generate_all()
@@ -302,7 +326,7 @@ def _run_list(args: argparse.Namespace) -> int:
 def _run_onepdf(args: argparse.Namespace) -> int:
     repo_path = Path(args.repo).resolve()
     if not repo_path.is_dir():
-        print(f"Error: '{args.repo}' is not a directory")
+        log.error("Error: '%s' is not a directory", args.repo)
         return 1
 
     out_pdf = args.output
@@ -322,18 +346,18 @@ def _run_onepdf(args: argparse.Namespace) -> int:
         include_tree=not args.no_tree,
         include_index=not args.no_index,
     )
-    print(
-        "onepdf summary: "
-        f"seen={stats.get('seen_files', 0)}, "
-        f"included={stats.get('included', 0)}, "
-        f"ignored={stats.get('ignored_by_pattern', 0)}, "
-        f"size/empty={stats.get('skipped_size_or_empty', 0)}, "
-        f"binary={stats.get('skipped_binary', 0)}, "
-        f"errors={stats.get('skipped_unreadable', 0)}, "
-        f"pages={stats.get('pages', 0)}, "
-        f"output={stats.get('output_bytes', 0)} bytes"
+    log.info(
+        "onepdf summary: seen=%d, included=%d, ignored=%d, size/empty=%d, binary=%d, errors=%d, pages=%d, output=%d bytes",
+        stats.get("seen_files", 0),
+        stats.get("included", 0),
+        stats.get("ignored_by_pattern", 0),
+        stats.get("skipped_size_or_empty", 0),
+        stats.get("skipped_binary", 0),
+        stats.get("skipped_unreadable", 0),
+        stats.get("pages", 0),
+        stats.get("output_bytes", 0),
     )
-    print(f"PDF: {Path(out_pdf).resolve()}")
+    log.info("PDF: %s", Path(out_pdf).resolve())
     return 0
 
 
@@ -352,7 +376,29 @@ def _run_help(
 def main(argv: list[str] | None = None) -> int:
     raw_args = sys.argv[1:] if argv is None else argv
     parser, commands = build_parser()
+
+    # Better error for `pixcode some_word` where `some_word` isn't a path.
+    known_commands = {"generate", "list", "help", "onepdf", "allinone"}
+    if raw_args:
+        first = raw_args[0]
+        looks_like_path = (
+            first.startswith(".")
+            or ("/" in first)
+            or ("\\" in first)
+            or (":" in first)
+        )
+        if (first not in known_commands) and (not first.startswith("-")):
+            if looks_like_path and not Path(first).exists():
+                sys.stderr.write(f"Error: '{first}' does not exist.\n\n")
+                parser.print_help()
+                return 2
+            if (not looks_like_path) and not Path(first).exists():
+                sys.stderr.write(f"Error: unknown command or path '{first}'.\n\n")
+                parser.print_help()
+                return 2
+
     args = parser.parse_args(_normalize_legacy_args(raw_args))
+    _configure_logging(getattr(args, "log_level", "INFO"))
 
     if args.command == "list":
         return _run_list(args)

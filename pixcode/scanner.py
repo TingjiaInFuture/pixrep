@@ -1,10 +1,17 @@
-import fnmatch
 import os
 from pathlib import Path
 
-from .constants import DEFAULT_IGNORE_DIRS, DEFAULT_IGNORE_PATTERNS
+from .constants import DEFAULT_IGNORE_PATTERNS
+from .file_utils import (
+    build_tree,
+    detect_language,
+    is_probably_text,
+    line_count_from_bytes,
+    matches_any,
+    normalize_posix_path,
+    should_ignore_dir,
+)
 from .models import FileInfo, RepoInfo
-from .syntax import LANG_MAP
 
 
 class RepoScanner:
@@ -14,30 +21,12 @@ class RepoScanner:
         self.max_file_size = max_file_size
         self.extra_ignore = extra_ignore or []
         self._ignore_patterns = [*DEFAULT_IGNORE_PATTERNS, *self.extra_ignore]
-        self._ignore_patterns_lower = [p.lower() for p in self._ignore_patterns]
-
-    def _should_ignore_dir(self, dirname: str) -> bool:
-        return dirname in DEFAULT_IGNORE_DIRS or dirname.startswith(".")
 
     def _should_ignore_file(self, filename: str) -> bool:
-        lower = filename.lower()
-        for pattern, pattern_lower in zip(self._ignore_patterns, self._ignore_patterns_lower):
-            if fnmatch.fnmatch(filename, pattern) or fnmatch.fnmatch(lower, pattern_lower):
-                return True
-        return False
+        return matches_any(filename, self._ignore_patterns)
 
     def _detect_language(self, filepath: Path) -> str:
-        special = {
-            "dockerfile": "docker", "makefile": "makefile",
-            "cmakelists.txt": "cmake", "rakefile": "ruby",
-            "gemfile": "ruby", "requirements.txt": "text",
-            "pipfile": "toml", "cargo.toml": "toml",
-            "go.mod": "go", "go.sum": "text",
-        }
-        name = filepath.name.lower()
-        if name in special:
-            return special[name]
-        return LANG_MAP.get(filepath.suffix.lower(), "text")
+        return detect_language(filepath)
 
     def _read_bytes(self, filepath: Path) -> bytes | None:
         try:
@@ -45,20 +34,8 @@ class RepoScanner:
         except (IOError, OSError):
             return None
 
-    @staticmethod
-    def _is_text_bytes(blob: bytes) -> bool:
-        return b"\x00" not in blob[:8192]
-
-    @staticmethod
-    def _line_count_from_bytes(blob: bytes) -> int:
-        if not blob:
-            return 0
-        line_count = blob.count(b"\n")
-        if not blob.endswith(b"\n"):
-            line_count += 1
-        return line_count
-
     def scan(self, include_content: bool = True) -> RepoInfo:
+        """Scan repository files and return a populated RepoInfo."""
         repo = RepoInfo(root=self.root, name=self.root.name)
         files = []
         scan_stats = {
@@ -70,7 +47,7 @@ class RepoScanner:
         }
 
         for dirpath, dirnames, filenames in os.walk(self.root):
-            dirnames[:] = sorted(d for d in dirnames if not self._should_ignore_dir(d))
+            dirnames[:] = sorted(d for d in dirnames if not should_ignore_dir(d))
             for filename in sorted(filenames):
                 scan_stats["seen_files"] += 1
                 if self._should_ignore_file(filename):
@@ -90,10 +67,10 @@ class RepoScanner:
                 if blob is None:
                     scan_stats["skipped_unreadable"] += 1
                     continue
-                if not self._is_text_bytes(blob):
+                if not is_probably_text(blob):
                     scan_stats["skipped_binary"] += 1
                     continue
-                line_count = self._line_count_from_bytes(blob)
+                line_count = line_count_from_bytes(blob)
                 content = ""
                 if include_content:
                     content = blob.decode(encoding="utf-8", errors="replace")
@@ -123,23 +100,5 @@ class RepoScanner:
         return repo
 
     def _build_tree(self, files: list[FileInfo]) -> str:
-        tree = {}
-        for info in files:
-            parts = info.path.parts
-            node = tree
-            for part in parts[:-1]:
-                node = node.setdefault(f"{part}/", {})
-            node[parts[-1]] = None
-        lines = [f"{self.root.name}/"]
-        self._tree_lines(tree, lines, "")
-        return "\n".join(lines)
-
-    def _tree_lines(self, node: dict, lines: list[str], prefix: str):
-        items = list(node.items())
-        for index, (name, subtree) in enumerate(items):
-            is_last = (index == len(items) - 1)
-            connector = "└── " if is_last else "├── "
-            lines.append(f"{prefix}{connector}{name}")
-            if subtree is not None:
-                extension = "    " if is_last else "│   "
-                self._tree_lines(subtree, lines, prefix + extension)
+        rels = [normalize_posix_path(info.path) for info in files]
+        return build_tree(rels, self.root.name, style="unicode")
