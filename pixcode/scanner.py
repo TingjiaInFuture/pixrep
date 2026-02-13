@@ -1,4 +1,5 @@
 import os
+import logging
 from pathlib import Path
 
 from .constants import DEFAULT_IGNORE_PATTERNS
@@ -12,6 +13,8 @@ from .file_utils import (
     should_ignore_dir,
 )
 from .models import FileInfo, RepoInfo
+
+log = logging.getLogger(__name__)
 
 
 class RepoScanner:
@@ -31,14 +34,15 @@ class RepoScanner:
     def _read_bytes(self, filepath: Path) -> bytes | None:
         try:
             return filepath.read_bytes()
-        except (IOError, OSError):
+        except (IOError, OSError) as e:
+            log.debug("failed to read file: %s (%s)", filepath, e)
             return None
 
     def scan(self, include_content: bool = True) -> RepoInfo:
         """Scan repository files and return a populated RepoInfo."""
         repo = RepoInfo(root=self.root, name=self.root.name)
         files = []
-        scan_stats = {
+        scan_stats: dict[str, int] = {
             "seen_files": 0,
             "ignored_by_pattern": 0,
             "skipped_unreadable": 0,

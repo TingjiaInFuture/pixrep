@@ -51,29 +51,35 @@ class CodeInsightEngine:
         self._collect_eslint(issues)
         return dict(issues)
 
-    def _collect_ruff(self, issues: dict[str, list[LintIssue]]):
-        if not shutil.which("ruff"):
-            return
-        cmd = ["ruff", "check", "--output-format", "json", str(self.repo.root)]
+    def _run_json_command(self, cmd: list[str], *, cwd: Path, tool: str):
         try:
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                cwd=str(self.repo.root),
+                cwd=str(cwd),
                 timeout=self.linter_timeout,
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
-            log.debug("ruff invocation failed or timed out")
-            return
-        payload = proc.stdout.strip()
+            log.debug("%s invocation failed or timed out", tool)
+            return None
+
+        payload = (proc.stdout or "").strip()
         if not payload:
-            return
+            return None
         try:
-            data = json.loads(payload)
+            return json.loads(payload)
         except json.JSONDecodeError:
-            log.debug("ruff output was not valid json")
+            log.debug("%s output was not valid json", tool)
+            return None
+
+    def _collect_ruff(self, issues: dict[str, list[LintIssue]]):
+        if not shutil.which("ruff"):
+            return
+        cmd = ["ruff", "check", "--output-format", "json", str(self.repo.root)]
+        data = self._run_json_command(cmd, cwd=self.repo.root, tool="ruff")
+        if not data:
             return
         for item in data:
             filename = item.get("filename")
@@ -105,25 +111,8 @@ class CodeInsightEngine:
             "--ext",
             ".js,.jsx,.ts,.tsx",
         ]
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=str(self.repo.root),
-                timeout=self.linter_timeout,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            log.debug("eslint invocation failed or timed out")
-            return
-        payload = proc.stdout.strip()
-        if not payload:
-            return
-        try:
-            files = json.loads(payload)
-        except json.JSONDecodeError:
-            log.debug("eslint output was not valid json")
+        files = self._run_json_command(cmd, cwd=self.repo.root, tool="eslint")
+        if not files:
             return
         for entry in files:
             rel = self._relative_to_repo(entry.get("filePath", ""))
@@ -342,6 +331,10 @@ class _PyCallVisitor(ast.NodeVisitor):
         self.scope.append(current)
         self.generic_visit(node)
         self.scope.pop()
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+        # Treat async defs like regular functions for best-effort call graphs.
+        self.visit_FunctionDef(node)  # type: ignore[arg-type]
 
     def visit_Call(self, node: ast.Call):
         callee = self._call_name(node.func)

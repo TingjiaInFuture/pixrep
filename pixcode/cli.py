@@ -6,6 +6,7 @@ from pathlib import Path
 from .pdf_generator import PDFGenerator
 from .scanner import RepoScanner
 from .onepdf import pack_repo_to_one_pdf
+from .models import RepoInfo
 from .version import __version__
 
 
@@ -133,6 +134,11 @@ Examples:
             name,
             parents=[common],
             help=help_text,
+            description=(
+                "Pack files into a single minimized PDF. Note: onepdf uses an ASCII-only PDF text writer; "
+                "non-ASCII characters will be escaped as \\uXXXX. "
+                "/ 打包为单个极简 PDF。注意：onepdf 使用仅 ASCII 的 PDF 文本写入器，非 ASCII 字符会转义为 \\uXXXX。"
+            ),
             formatter_class=argparse.RawTextHelpFormatter,
         )
         p.add_argument(
@@ -233,7 +239,7 @@ def _configure_logging(level: str) -> None:
     logging.getLogger("reportlab").setLevel(logging.WARNING)
 
 
-def _scan_repo(args: argparse.Namespace, include_content: bool = True):
+def _scan_repo(args: argparse.Namespace, include_content: bool = True) -> tuple[RepoInfo | None, int]:
     repo_path = Path(args.repo).resolve()
     if not repo_path.is_dir():
         log.error("Error: '%s' is not a directory", args.repo)
