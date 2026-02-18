@@ -9,7 +9,6 @@ from .constants import DEFAULT_IGNORE_PATTERNS
 from .file_utils import (
     build_tree,
     compile_ignore_matcher,
-    matches_any,
     normalize_posix_path,
 )
 from .onepdf_writer import MinimalPDFWriter, pdf_escape_literal
@@ -136,7 +135,7 @@ def collect_core_files(
             continue
 
         # Include-pattern filter (if provided, file must match at least one).
-        if include_match and not matches_any(rel_posix, include_patterns):
+        if include_match and not include_match(rel_posix):
             stats["skipped_not_included"] += 1
             continue
 
@@ -262,13 +261,13 @@ def pack_repo_to_one_pdf(
         header = f"[{idx:04d}] {f.rel_posix}  ({f.language}, {f.line_count} lines, {f.size} bytes)"
         emit(header)
         emit("-" * min(max_cols, max(10, len(header))))
-        for raw_line in _ascii_safe(f.content).split("\n"):
-            raw_line = raw_line.rstrip()
+        for raw_line in f.content.split("\n"):
+            safe_line = _ascii_safe(raw_line.rstrip())
             if wrap:
-                for chunk in _wrap_line(raw_line, max_cols):
+                for chunk in _wrap_line(safe_line, max_cols):
                     emit(chunk)
             else:
-                emit(raw_line)
+                emit(safe_line)
         emit("")
 
     flush_page()

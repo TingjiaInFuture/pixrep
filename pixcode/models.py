@@ -69,16 +69,3 @@ class RepoInfo:
     language_stats: dict = field(default_factory=dict)
     tree_str: str = ""
     scan_stats: dict[str, int] = field(default_factory=dict)
-
-
-
-@dataclass
-class RepoInfo:
-    root: Path
-    name: str
-    files: list[FileInfo] = field(default_factory=list)
-    total_lines: int = 0
-    total_size: int = 0
-    language_stats: dict = field(default_factory=dict)
-    tree_str: str = ""
-    scan_stats: dict[str, int] = field(default_factory=dict)

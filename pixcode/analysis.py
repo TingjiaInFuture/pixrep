@@ -152,11 +152,12 @@ class CodeInsightEngine:
         return dict(issues)
 
     def _build_semantic_map(self, info: FileInfo) -> SemanticMap:
+        content = info.load_content()
         if info.language == "python":
-            return self._python_semantic_map(info.content)
+            return self._python_semantic_map(content)
         if info.language in {"javascript", "typescript"}:
-            return self._js_semantic_map(info.content)
-        return self._generic_semantic_map(info.content, info.language)
+            return self._js_semantic_map(content)
+        return self._generic_semantic_map(content, info.language)
 
     def _python_semantic_map(self, content: str) -> SemanticMap:
         content = content.lstrip("\ufeff")
