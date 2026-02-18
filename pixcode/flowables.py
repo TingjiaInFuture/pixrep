@@ -12,6 +12,35 @@ from .theme import COLORS
 from .utils import str_width, truncate_to_width
 
 
+_SPLIT_WS = re.compile(r"(\s+)")
+_BACKTICK_RE = re.compile(r"(?<!\\)`")
+
+
+def _strip_nonword(token: str) -> str:
+    start = 0
+    end = len(token)
+    while start < end and not (token[start].isalnum() or token[start] == "_"):
+        start += 1
+    while end > start and not (token[end - 1].isalnum() or token[end - 1] == "_"):
+        end -= 1
+    return token[start:end]
+
+
+def _is_simple_number(word: str) -> bool:
+    if not word:
+        return False
+    dot_seen = False
+    for ch in word:
+        if ch == ".":
+            if dot_seen:
+                return False
+            dot_seen = True
+            continue
+        if not ch.isdigit():
+            return False
+    return True
+
+
 class CodeBlockChunk(Flowable):
     """
     渲染一段代码行，保证高度不超页面。
@@ -62,18 +91,10 @@ class CodeBlockChunk(Flowable):
         if self.language in {"javascript", "typescript"}:
             for line in self.code_lines:
                 mask.append(in_ml)
-                # Toggle on unescaped backticks.
-                n = 0
-                esc = False
-                for ch in line:
-                    if esc:
-                        esc = False
-                        continue
-                    if ch == "\\":
-                        esc = True
-                        continue
-                    if ch == "`":
-                        n += 1
+                # Fast-path for common lines without template literals.
+                if "`" not in line:
+                    continue
+                n = len(_BACKTICK_RE.findall(line))
                 if n % 2:
                     mask[-1] = True
                     in_ml = not in_ml
@@ -181,7 +202,7 @@ class CodeBlockChunk(Flowable):
                 continue
 
             # code segment: keep whitespace as-is, but colorize tokens.
-            tokens = re.split(r"(\s+)", seg_text)
+            tokens = _SPLIT_WS.split(seg_text)
             for token in tokens:
                 if not token:
                     continue
@@ -192,7 +213,7 @@ class CodeBlockChunk(Flowable):
                 color = COLORS["fg"]
                 bold = False
 
-                word = re.sub(r"^[^\w]*|[^\w]*$", "", token)
+                word = _strip_nonword(token)
 
                 if word in self.kw_set:
                     color = COLORS["keyword"]
@@ -201,7 +222,7 @@ class CodeBlockChunk(Flowable):
                     color = COLORS["type"]
                 elif self.language == "python" and word in ("self", "cls"):
                     color = COLORS["red"]
-                elif re.match(r"^\d+\.?\d*$", word):
+                elif _is_simple_number(word):
                     color = COLORS["number"]
 
                 canv.setFillColor(color)

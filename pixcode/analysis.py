@@ -1,4 +1,5 @@
 import ast
+import concurrent.futures
 import json
 import logging
 import re
@@ -47,8 +48,21 @@ class CodeInsightEngine:
 
     def _collect_lint_issues(self) -> dict[str, list[LintIssue]]:
         issues: dict[str, list[LintIssue]] = defaultdict(list)
-        self._collect_ruff(issues)
-        self._collect_eslint(issues)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            fut_ruff = pool.submit(self._collect_ruff)
+            fut_eslint = pool.submit(self._collect_eslint)
+            done, not_done = concurrent.futures.wait(
+                {fut_ruff, fut_eslint},
+                timeout=max(1, self.linter_timeout * 2),
+            )
+
+            for fut in done:
+                partial = fut.result() or {}
+                for rel, rel_issues in partial.items():
+                    issues[rel].extend(rel_issues)
+
+            for fut in not_done:
+                fut.cancel()
         return dict(issues)
 
     def _run_json_command(self, cmd: list[str], *, cwd: Path, tool: str):
@@ -74,13 +88,14 @@ class CodeInsightEngine:
             log.debug("%s output was not valid json", tool)
             return None
 
-    def _collect_ruff(self, issues: dict[str, list[LintIssue]]):
+    def _collect_ruff(self) -> dict[str, list[LintIssue]]:
+        issues: dict[str, list[LintIssue]] = defaultdict(list)
         if not shutil.which("ruff"):
-            return
+            return {}
         cmd = ["ruff", "check", "--output-format", "json", str(self.repo.root)]
         data = self._run_json_command(cmd, cwd=self.repo.root, tool="ruff")
         if not data:
-            return
+            return {}
         for item in data:
             filename = item.get("filename")
             location = item.get("location", {})
@@ -99,10 +114,12 @@ class CodeInsightEngine:
                     message=message,
                 )
             )
+        return dict(issues)
 
-    def _collect_eslint(self, issues: dict[str, list[LintIssue]]):
+    def _collect_eslint(self) -> dict[str, list[LintIssue]]:
+        issues: dict[str, list[LintIssue]] = defaultdict(list)
         if not shutil.which("eslint"):
-            return
+            return {}
         cmd = [
             "eslint",
             "--format",
@@ -113,7 +130,7 @@ class CodeInsightEngine:
         ]
         files = self._run_json_command(cmd, cwd=self.repo.root, tool="eslint")
         if not files:
-            return
+            return {}
         for entry in files:
             rel = self._relative_to_repo(entry.get("filePath", ""))
             if not rel:
@@ -132,6 +149,7 @@ class CodeInsightEngine:
                         message=text,
                     )
                 )
+        return dict(issues)
 
     def _build_semantic_map(self, info: FileInfo) -> SemanticMap:
         if info.language == "python":
@@ -153,7 +171,12 @@ class CodeInsightEngine:
         methods: set[str] = set()
         edges: set[tuple[str, str]] = set()
 
-        for node in tree.body:
+        parent: dict[ast.AST, ast.AST] = {}
+        for p in ast.walk(tree):
+            for c in ast.iter_child_nodes(p):
+                parent[c] = p
+
+        for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 class_name = node.name
                 class_methods: list[str] = []
@@ -162,13 +185,21 @@ class CodeInsightEngine:
                     if bname:
                         inherits.append((class_name, bname))
                 for body_node in node.body:
-                    if isinstance(body_node, ast.FunctionDef):
+                    if isinstance(body_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         class_methods.append(body_node.name)
                         methods.add(f"{class_name}.{body_node.name}")
                         methods.add(body_node.name)
                 classes[class_name] = class_methods
-            elif isinstance(node, ast.FunctionDef):
-                funcs.add(node.name)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                cur = node
+                in_class = False
+                while cur in parent:
+                    cur = parent[cur]
+                    if isinstance(cur, ast.ClassDef):
+                        in_class = True
+                        break
+                if not in_class:
+                    funcs.add(node.name)
 
         defined = funcs | methods
         walker = _PyCallVisitor(defined)
@@ -284,10 +315,12 @@ class CodeInsightEngine:
     @staticmethod
     def _js_function_spans(content: str) -> list[tuple[str, int, int]]:
         """
-        Extract best-effort function spans for JS/TS.
+        Extract function spans for JS/TS using brace-balance to find exact
+        function body end positions.
 
-        This is heuristic (regex-based) but provides a much more useful call
-        graph than connecting every call to arbitrary "top N" symbols.
+        This replaces the previous heuristic of treating the next function
+        definition's start as the current function's end — which was wrong for
+        nested functions, arrow functions, and closures.
         """
         hits: list[tuple[str, int]] = []
         for pat in JS_FN_PATS:
@@ -303,11 +336,32 @@ class CodeInsightEngine:
             if name not in earliest or pos < earliest[name]:
                 earliest[name] = pos
 
-        ordered = sorted(((n, p) for n, p in earliest.items()), key=lambda t: t[1])
+        ordered = sorted(earliest.items(), key=lambda t: t[1])
+        content_len = len(content)
         spans: list[tuple[str, int, int]] = []
-        for idx, (name, start) in enumerate(ordered):
-            end = ordered[idx + 1][1] if idx + 1 < len(ordered) else len(content)
+
+        for name, start in ordered:
+            # Find the opening brace of the function body.
+            brace_start = content.find("{", start)
+            if brace_start == -1:
+                continue
+
+            # Walk forward balancing braces — cap scan at 50 KB per function.
+            depth = 0
+            end = brace_start + 1
+            scan_limit = min(brace_start + 50_000, content_len)
+            for i in range(brace_start, scan_limit):
+                ch = content[i]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+
             spans.append((name, start, end))
+
         return spans
 
 

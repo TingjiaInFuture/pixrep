@@ -5,10 +5,10 @@ from pathlib import Path
 from .constants import DEFAULT_IGNORE_PATTERNS
 from .file_utils import (
     build_tree,
+    compile_ignore_matcher,
     detect_language,
     is_probably_text,
     line_count_from_bytes,
-    matches_any,
     normalize_posix_path,
     should_ignore_dir,
 )
@@ -24,9 +24,10 @@ class RepoScanner:
         self.max_file_size = max_file_size
         self.extra_ignore = extra_ignore or []
         self._ignore_patterns = [*DEFAULT_IGNORE_PATTERNS, *self.extra_ignore]
+        self._ignore_match = compile_ignore_matcher(self._ignore_patterns)
 
-    def _should_ignore_file(self, filename: str) -> bool:
-        return matches_any(filename, self._ignore_patterns)
+    def _should_ignore_file(self, rel_posix: str, filename: str) -> bool:
+        return self._ignore_match(rel_posix) or self._ignore_match(filename)
 
     def _detect_language(self, filepath: Path) -> str:
         return detect_language(filepath)
@@ -54,11 +55,12 @@ class RepoScanner:
             dirnames[:] = sorted(d for d in dirnames if not should_ignore_dir(d))
             for filename in sorted(filenames):
                 scan_stats["seen_files"] += 1
-                if self._should_ignore_file(filename):
-                    scan_stats["ignored_by_pattern"] += 1
-                    continue
                 filepath = Path(dirpath) / filename
                 rel_path = filepath.relative_to(self.root)
+                rel_posix = normalize_posix_path(rel_path)
+                if self._should_ignore_file(rel_posix, filename):
+                    scan_stats["ignored_by_pattern"] += 1
+                    continue
                 try:
                     size = filepath.stat().st_size
                 except OSError:

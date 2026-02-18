@@ -99,6 +99,18 @@ Examples:
         help="Timeout for each linter command (default: 20) / 单次 linter 超时",
     )
     generate_parser.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Skip files whose PDF is already up to date / 跳过已是最新 PDF 的文件",
+    )
+    generate_parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Parallel worker threads for PDF generation (default: CPU count, max 8) / PDF 生成并行线程数",
+    )
+    generate_parser.add_argument(
         "--list-only", action="store_true",
         help=argparse.SUPPRESS,
     )
@@ -310,6 +322,8 @@ def _run_generate(args: argparse.Namespace) -> int:
         enable_semantic_minimap=not args.disable_semantic_minimap,
         enable_lint_heatmap=not args.disable_lint_heatmap,
         linter_timeout=args.linter_timeout,
+        incremental=args.incremental,
+        max_workers=args.workers,
     )
     if args.index_only:
         generator.generate_index_only()

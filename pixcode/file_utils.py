@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fnmatch
+import re
 from pathlib import Path, PurePosixPath
 
 from .constants import DEFAULT_IGNORE_DIRS
@@ -32,6 +33,25 @@ def matches_any(path_posix: str, patterns: list[str]) -> bool:
         if fnmatch.fnmatch(path_posix, pat) or fnmatch.fnmatch(lower, pat.lower()):
             return True
     return False
+
+
+def compile_ignore_matcher(patterns: list[str]):
+    """
+    Compile glob ignore patterns into a single case-insensitive matcher.
+
+    Returns a callable: matcher(path_posix: str) -> bool
+    """
+    lowered = [p.lower() for p in patterns if p]
+    if not lowered:
+        return lambda _path: False
+
+    pieces = [f"(?:{fnmatch.translate(p)})" for p in lowered]
+    combined = re.compile("|".join(pieces))
+
+    def _match(path_posix: str) -> bool:
+        return bool(combined.match(path_posix.lower()))
+
+    return _match
 
 
 def should_ignore_dir(dirname: str) -> bool:

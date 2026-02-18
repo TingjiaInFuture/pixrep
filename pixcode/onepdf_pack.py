@@ -1,23 +1,22 @@
 from __future__ import annotations
 
-import os
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from .constants import DEFAULT_IGNORE_PATTERNS
 from .file_utils import (
     build_tree,
-    detect_language,
-    is_probably_text,
-    line_count_from_bytes,
+    compile_ignore_matcher,
     matches_any,
     normalize_posix_path,
-    safe_join_repo,
-    should_ignore_dir,
 )
 from .onepdf_writer import MinimalPDFWriter, pdf_escape_literal
+from .scanner import RepoScanner
+
+# Pre-built translate table shared by all _ascii_safe calls.
+_ASCII_SAFE_TABLE = str.maketrans({"\t": "    ", "\r": ""})
 
 
 DEFAULT_CORE_IGNORE_PATTERNS = [
@@ -83,84 +82,72 @@ def collect_core_files(
     """
     Collect (mostly) code files for ONEPDF_CORE.
 
-    prefer_git uses `git ls-files` to avoid vendor/build outputs that might be
-    present in working trees but not in the repo.
+    Delegates file discovery and filtering to RepoScanner so that the two
+    scanning paths (generate vs onepdf) share a single implementation.
+    When prefer_git is True and a git repo is found, applies a secondary
+    allow-list derived from `git ls-files` to strip untracked build artefacts.
     """
     extra_ignore = extra_ignore or []
     include_patterns = include_patterns or []
 
-    ignore_patterns = [*DEFAULT_IGNORE_PATTERNS, *extra_ignore]
+    # Build the combined ignore set including optional core-only extras.
+    combined_ignore = [*extra_ignore]
     if core_only:
-        ignore_patterns = [*ignore_patterns, *DEFAULT_CORE_IGNORE_PATTERNS]
+        combined_ignore = [*combined_ignore, *DEFAULT_CORE_IGNORE_PATTERNS]
 
-    stats = {
-        "seen_files": 0,
-        "included": 0,
-        "ignored_by_pattern": 0,
-        "skipped_unreadable": 0,
-        "skipped_size_or_empty": 0,
-        "skipped_binary": 0,
-        "skipped_not_included": 0,
-        "skipped_path_escape": 0,
-    }
+    scanner = RepoScanner(
+        str(repo_root),
+        max_file_size=max_file_size,
+        extra_ignore=combined_ignore,
+    )
+    repo = scanner.scan(include_content=True)
 
-    rel_files: list[str] = []
+    # Optionally restrict to git-tracked files to mirror the old prefer_git
+    # behaviour (skip vendor/build outputs present in the worktree but not
+    # tracked by git).
+    git_set: set[str] | None = None
     if prefer_git:
-        rel_files = _git_ls_files(repo_root) or []
-    if not rel_files:
-        for dirpath, dirnames, filenames in os.walk(repo_root):
-            dirnames[:] = sorted(d for d in dirnames if not should_ignore_dir(d))
-            for filename in filenames:
-                rel_files.append(str((Path(dirpath) / filename).relative_to(repo_root)))
+        git_paths = _git_ls_files(repo_root)
+        if git_paths:
+            git_set = {normalize_posix_path(p) for p in git_paths}
+
+    # Build include/exclude matchers for the secondary filters.
+    include_match = compile_ignore_matcher(include_patterns) if include_patterns else None
 
     packed: list[PackedFile] = []
-    for rel in rel_files:
-        stats["seen_files"] += 1
-        rel_posix = normalize_posix_path(rel)
+    stats: dict[str, int] = {
+        "seen_files": repo.scan_stats.get("seen_files", 0),
+        "included": 0,
+        "ignored_by_pattern": repo.scan_stats.get("ignored_by_pattern", 0),
+        "skipped_unreadable": repo.scan_stats.get("skipped_unreadable", 0),
+        "skipped_size_or_empty": repo.scan_stats.get("skipped_size_or_empty", 0),
+        "skipped_binary": repo.scan_stats.get("skipped_binary", 0),
+        "skipped_not_included": 0,
+        "skipped_path_escape": 0,
+        "skipped_not_git": 0,
+    }
 
-        if include_patterns and not matches_any(rel_posix, include_patterns):
+    for info in repo.files:
+        rel_posix = normalize_posix_path(info.path)
+
+        # git allow-list filter.
+        if git_set is not None and rel_posix not in git_set:
+            stats["skipped_not_git"] = stats.get("skipped_not_git", 0) + 1
+            continue
+
+        # Include-pattern filter (if provided, file must match at least one).
+        if include_match and not matches_any(rel_posix, include_patterns):
             stats["skipped_not_included"] += 1
-            continue
-
-        basename = PurePosixPath(rel_posix).name
-        if matches_any(rel_posix, ignore_patterns) or matches_any(basename, ignore_patterns):
-            stats["ignored_by_pattern"] += 1
-            continue
-
-        abs_path = safe_join_repo(repo_root, rel_posix)
-        if abs_path is None:
-            stats["skipped_path_escape"] += 1
-            continue
-
-        try:
-            st = abs_path.stat()
-        except OSError:
-            stats["skipped_unreadable"] += 1
-            continue
-
-        size = int(st.st_size)
-        if size == 0 or size > max_file_size:
-            stats["skipped_size_or_empty"] += 1
-            continue
-
-        try:
-            blob = abs_path.read_bytes()
-        except OSError:
-            stats["skipped_unreadable"] += 1
-            continue
-
-        if not is_probably_text(blob):
-            stats["skipped_binary"] += 1
             continue
 
         packed.append(
             PackedFile(
                 rel_posix=rel_posix,
-                abs_path=abs_path,
-                language=detect_language(rel_posix),
-                size=size,
-                line_count=line_count_from_bytes(blob),
-                content=blob.decode("utf-8", errors="replace"),
+                abs_path=info.abs_path,
+                language=info.language,
+                size=info.size,
+                line_count=info.line_count,
+                content=info.load_content(),
             )
         )
         stats["included"] += 1
@@ -170,18 +157,12 @@ def collect_core_files(
 
 
 def _ascii_safe(s: str) -> str:
-    # Keep PDF text simple and predictable: escape non-ASCII as \\uXXXX.
+    # Uses module-level translate table; all other replacements in the loop.
     out: list[str] = []
-    for ch in s:
+    for ch in s.translate(_ASCII_SAFE_TABLE):
         code = ord(ch)
-        if ch == "\t":
-            out.append("    ")
-        elif ch in ("\r",):
-            continue
-        elif 32 <= code <= 126:
+        if 32 <= code <= 126 or ch == "\n":
             out.append(ch)
-        elif ch == "\n":
-            out.append("\n")
         else:
             out.append(f"\\u{code:04x}")
     return "".join(out)
@@ -206,7 +187,11 @@ def pack_repo_to_one_pdf(
     include_tree: bool = True,
     include_index: bool = True,
 ) -> dict[str, int]:
-    """Pack repository files into a single minimized PDF (ONEPDF_CORE)."""
+    """Pack repository files into a single minimized PDF (ONEPDF_CORE).
+
+    Lines are emitted one at a time and flushed into page streams without
+    ever building the full line list in memory (streaming approach).
+    """
     files, stats = collect_core_files(
         repo_root=repo_root,
         max_file_size=max_file_size,
@@ -216,7 +201,6 @@ def pack_repo_to_one_pdf(
         include_patterns=include_patterns,
     )
 
-    # Render into pages as a list of lines first (more compact streams, simpler logic).
     font_size = 7
     leading = 9  # points
     top = 36
@@ -224,67 +208,69 @@ def pack_repo_to_one_pdf(
     page_height = 842
     max_lines = max(1, int((page_height - top - bottom) / leading))
 
-    lines: list[str] = []
-    lines.append("pixcode onepdf")
-    lines.append(f"repo: {repo_root.name}")
-    lines.append(f"generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    lines.append(f"files: {len(files)}")
-    lines.append("")
-
-    if include_tree:
-        lines.append("== tree ==")
-        tree_str = build_tree([f.rel_posix for f in files], repo_root.name, style="ascii")
-        lines.extend(tree_str.split("\n"))
-        lines.append("")
-
-    if include_index:
-        lines.append("== index ==")
-        for idx, f in enumerate(files, start=1):
-            lines.append(f"{idx:04d}  {f.rel_posix}  ({f.line_count} lines, {f.size} bytes)")
-        lines.append("")
-
-    lines.append("== files ==")
-    lines.append("")
-
-    for idx, f in enumerate(files, start=1):
-        header = f"[{idx:04d}] {f.rel_posix}  ({f.language}, {f.line_count} lines, {f.size} bytes)"
-        lines.append(header)
-        lines.append("-" * min(max_cols, max(10, len(header))))
-        content = _ascii_safe(f.content)
-        for raw_line in content.split("\n"):
-            raw_line = raw_line.rstrip()
-            if wrap:
-                for chunk in _wrap_line(raw_line, max_cols):
-                    lines.append(chunk)
-            else:
-                lines.append(raw_line)
-        lines.append("")
-
-    # Convert lines to page streams.
     page_streams: list[bytes] = []
     current: list[str] = []
 
-    def flush_page():
+    def flush_page() -> None:
         if not current:
             return
         start_x = 36
         start_y = 842 - 36 - font_size
-        parts: list[bytes] = []
-        parts.append(b"BT\n")
-        parts.append(b"/F1 %d Tf\n" % font_size)
-        parts.append(b"%d TL\n" % leading)
-        parts.append(b"%d %d Td\n" % (start_x, start_y))
-        for l in current:
-            esc = pdf_escape_literal(l)
+        parts: list[bytes] = [
+            b"BT\n",
+            b"/F1 %d Tf\n" % font_size,
+            b"%d TL\n" % leading,
+            b"%d %d Td\n" % (start_x, start_y),
+        ]
+        for line in current:
+            esc = pdf_escape_literal(line)
             parts.append(b"(" + esc.encode("ascii", errors="replace") + b") Tj\nT*\n")
         parts.append(b"ET\n")
         page_streams.append(b"".join(parts))
         current.clear()
 
-    for l in lines:
-        current.append(l)
+    def emit(line: str) -> None:
+        current.append(line)
         if len(current) >= max_lines:
             flush_page()
+
+    # ── Header ────────────────────────────────────────────────────────
+    emit("pixcode onepdf")
+    emit(f"repo: {repo_root.name}")
+    emit(f"generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    emit(f"files: {len(files)}")
+    emit("")
+
+    if include_tree:
+        emit("== tree ==")
+        tree_str = build_tree([f.rel_posix for f in files], repo_root.name, style="ascii")
+        for tree_line in tree_str.split("\n"):
+            emit(tree_line)
+        emit("")
+
+    if include_index:
+        emit("== index ==")
+        for idx, f in enumerate(files, start=1):
+            emit(f"{idx:04d}  {f.rel_posix}  ({f.line_count} lines, {f.size} bytes)")
+        emit("")
+
+    emit("== files ==")
+    emit("")
+
+    # ── File content ──────────────────────────────────────────────────
+    for idx, f in enumerate(files, start=1):
+        header = f"[{idx:04d}] {f.rel_posix}  ({f.language}, {f.line_count} lines, {f.size} bytes)"
+        emit(header)
+        emit("-" * min(max_cols, max(10, len(header))))
+        for raw_line in _ascii_safe(f.content).split("\n"):
+            raw_line = raw_line.rstrip()
+            if wrap:
+                for chunk in _wrap_line(raw_line, max_cols):
+                    emit(chunk)
+            else:
+                emit(raw_line)
+        emit("")
+
     flush_page()
 
     writer = MinimalPDFWriter(title=f"{repo_root.name} onepdf")

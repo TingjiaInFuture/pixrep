@@ -1,4 +1,6 @@
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 import re
@@ -27,7 +29,9 @@ class PDFGenerator:
                  fonts: FontRegistry | None = None,
                  enable_semantic_minimap: bool = True,
                  enable_lint_heatmap: bool = True,
-                 linter_timeout: int = 20):
+                 linter_timeout: int = 20,
+                 incremental: bool = False,
+                 max_workers: int | None = None):
         self.repo = repo
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -38,6 +42,9 @@ class PDFGenerator:
         self.avail_height = self.page_height - self.margin - 15 * mm
         self.enable_semantic_minimap = enable_semantic_minimap
         self.enable_lint_heatmap = enable_lint_heatmap
+        self.incremental = incremental
+        # None → use CPU count, capped at 8 to avoid over-subscription.
+        self.max_workers = max_workers if max_workers is not None else min(8, os.cpu_count() or 1)
         self.insight_engine = CodeInsightEngine(
             repo,
             enable_semantic_minimap=enable_semantic_minimap,
@@ -46,23 +53,57 @@ class PDFGenerator:
         )
 
     def generate_all(self):
-        """Generate index PDF and one PDF per file into output_dir."""
+        """Generate index PDF and one PDF per file into output_dir.
+
+        Files are processed in parallel (ThreadPoolExecutor) so that I/O and
+        ReportLab rendering overlap.  When `incremental=True` any file whose
+        source mtime is older than its existing PDF is skipped.
+        """
         log.info("")
         log.info("Project: %s", self.repo.name)
         log.info("Files: %d, Lines: %d", len(self.repo.files), self.repo.total_lines)
         log.info("Output: %s", self.output_dir)
+        if self.incremental:
+            log.info("Mode: incremental (skipping up-to-date files)")
         log.info("")
         self.insight_engine.enrich_repo()
         self._generate_index_pdf()
-        for info in self.repo.files:
-            self._generate_file_pdf(info)
+
+        pending = [
+            info for info in self.repo.files
+            if self._needs_regeneration(info)
+        ]
+        skipped = len(self.repo.files) - len(pending)
+        if skipped:
+            log.info("  Skipping %d up-to-date file PDFs", skipped)
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            futures = {pool.submit(self._generate_file_pdf, info): info for info in pending}
+            for fut in as_completed(futures):
+                exc = fut.exception()
+                if exc:
+                    info = futures[fut]
+                    log.warning("  Failed to generate PDF for %s: %s", info.path, exc)
+
         log.info("")
-        log.info("Done! Generated %d PDFs", len(self.repo.files) + 1)
+        log.info("Done! Generated %d PDFs (+ index)", len(pending))
 
     def generate_index_only(self) -> None:
         """Generate only `00_INDEX.pdf` into output_dir."""
         self.insight_engine.enrich_repo()
         self._generate_index_pdf()
+
+    def _needs_regeneration(self, info: "FileInfo") -> bool:
+        """Return True if the file PDF must be (re-)generated."""
+        if not self.incremental:
+            return True
+        pdf_path = self.output_dir / self._file_pdf_name(info)
+        if not pdf_path.exists():
+            return True
+        try:
+            return info.abs_path.stat().st_mtime > pdf_path.stat().st_mtime
+        except OSError:
+            return True
 
     def _page_footer(self, canvas, doc):
         canvas.saveState()
@@ -293,7 +334,7 @@ class PDFGenerator:
             story.append(SemanticMiniMap(file_info.semantic_map, fonts=self.fonts, width=cw))
             story.append(Spacer(1, 4 * mm))
 
-        all_lines = file_info.content.split("\n")
+        all_lines = file_info.load_content().split("\n")
         # Rough budget for header + metadata blocks on the first page before code starts.
         # This doesn't need to be exact; it's a layout heuristic.
         header_budget = 28
@@ -313,6 +354,7 @@ class PDFGenerator:
         doc.build(story,
                   onFirstPage=self._page_footer,
                   onLaterPages=self._page_footer)
+        file_info.release_content()
         log.info("  %s (%d lines)", pdf_name, file_info.line_count)
 
     def _add_code_chunks(self, story, all_lines, language, width,
