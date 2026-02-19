@@ -109,9 +109,22 @@ class CodeBlockChunk(Flowable):
 
     def split(self, availWidth, availHeight):
         self.block_width = min(self.block_width, availWidth)
-        max_lines = max(1, int((availHeight - self.padding * 2) / self.line_height))
-        if max_lines >= len(self.code_lines):
+        if availWidth <= 0:
+            return []
+
+        epsilon = 0.01
+        full_height = len(self.code_lines) * self.line_height + self.padding * 2
+        if full_height <= availHeight + epsilon:
             return [self]
+
+        max_lines = int((availHeight - self.padding * 2) / self.line_height)
+        while max_lines > 0:
+            chunk_height = max_lines * self.line_height + self.padding * 2
+            if chunk_height <= availHeight + epsilon:
+                break
+            max_lines -= 1
+        if max_lines <= 0:
+            return []
 
         first_chunk = CodeBlockChunk(
             self.code_lines[:max_lines],

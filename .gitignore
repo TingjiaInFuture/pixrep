@@ -18,3 +18,5 @@ build/
 .tmp_tests/
 .test_scratch/
 .tmp_py/
+
+.pixrep_cache/

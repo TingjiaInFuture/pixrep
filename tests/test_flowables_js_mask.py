@@ -29,6 +29,12 @@ class TestJsMultilineMask(unittest.TestCase):
         chunk = CodeBlockChunk(lines=lines, language="typescript", fonts=_DummyFonts())
         self.assertEqual(chunk._ml_string_mask, [False, False])
 
+    def test_split_returns_empty_when_height_too_small(self):
+        lines = ["line 1", "line 2"]
+        chunk = CodeBlockChunk(lines=lines, language="python", fonts=_DummyFonts())
+        tiny_height = chunk.padding * 2 + chunk.line_height - 0.1
+        self.assertEqual(chunk.split(500, tiny_height), [])
+
 
 if __name__ == "__main__":
     unittest.main()
