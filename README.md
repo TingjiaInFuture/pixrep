@@ -25,16 +25,26 @@ Instead of feeding raw text that consumes massive context windows, **pixrep** co
 *   **Test for Free:** Easily share your entire codebase with premium models (like **Claude Opus 4.6**) on platforms like **arena.ai** without hitting text limits.
 
 
-## 🚀 Why Visual Code? 
+## 🚀 Why Visual Code?
 
 Traditional text tokenization is expensive. Visual encoding compresses structure efficiently.
 
 *Comparison in Google AI Studio (Gemini 3 Pro):*
 
-| **Raw Files (Text Input)** | **pixrep OnePDF (Visual Input)** |
-| :---: | :---: |
-| ![Raw Files Usage](LINK_TO_IMAGE_2) | ![OnePDF Usage](LINK_TO_IMAGE_1) |
-| **31,812 Tokens** ❌<br>*(Cluttered context)* | **19,041 Tokens** ✅<br>*(Clean, single file)* |
+<table>
+  <tr>
+    <th width="50%">Raw Files (Text Input)</th>
+    <th width="50%">pixrep OnePDF (Visual Input)</th>
+  </tr>
+  <tr>
+    <td><img src="https://github.com/user-attachments/assets/44dc5c5f-5913-4eb6-b20c-d020cfc57fe1" width="100%" alt="Raw Files Usage"></td>
+    <td><img src="https://github.com/user-attachments/assets/822ae56b-e9d3-4c2c-847f-21bd5341971c" width="100%" alt="OnePDF Usage"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>31,812 Tokens</b> ❌<br><i>(Cluttered context)</i></td>
+    <td align="center"><b>19,041 Tokens</b> ✅<br><i>(Clean, single file)</i></td>
+  </tr>
+</table>
 
 ## 🎓 Academic Backing 
 
