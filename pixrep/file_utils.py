@@ -45,11 +45,26 @@ def compile_ignore_matcher(patterns: list[str]):
     if not lowered:
         return lambda _path: False
 
-    pieces = [f"(?:{fnmatch.translate(p)})" for p in lowered]
-    combined = re.compile("|".join(pieces))
+    path_patterns = [p for p in lowered if "/" in p]
+    basename_patterns = [p for p in lowered if "/" not in p]
+
+    path_re = None
+    basename_re = None
+    if path_patterns:
+        path_pieces = [f"(?:{fnmatch.translate(p)})" for p in path_patterns]
+        path_re = re.compile("|".join(path_pieces))
+    if basename_patterns:
+        base_pieces = [f"(?:{fnmatch.translate(p)})" for p in basename_patterns]
+        basename_re = re.compile("|".join(base_pieces))
 
     def _match(path_posix: str) -> bool:
-        return bool(combined.match(path_posix.lower()))
+        lower = path_posix.lower()
+        if path_re and path_re.match(lower):
+            return True
+        if basename_re:
+            base = PurePosixPath(lower).name
+            return bool(basename_re.match(base))
+        return False
 
     return _match
 

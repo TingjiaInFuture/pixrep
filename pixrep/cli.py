@@ -306,7 +306,7 @@ def _print_repo_list(repo, top_languages: int = 0):
 
 
 def _run_generate(args: argparse.Namespace) -> int:
-    include_content = not (args.index_only or args.list_only)
+    include_content = False
     repo, code = _scan_repo(args, include_content=include_content)
     if code != 0 or repo is None or not repo.files:
         return code

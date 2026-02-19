@@ -1,0 +1,33 @@
+import shutil
+import unittest
+import uuid
+from pathlib import Path
+
+from pixrep.onepdf_writer import MinimalPDFWriter
+
+
+class TestMinimalPDFWriter(unittest.TestCase):
+    def test_build_writes_valid_pdf_skeleton(self):
+        tmp_root = Path(__file__).resolve().parents[1] / ".test_scratch"
+        tmp_root.mkdir(parents=True, exist_ok=True)
+        out_pdf = tmp_root / f"onepdf_writer_{uuid.uuid4().hex}.pdf"
+        try:
+            writer = MinimalPDFWriter(title="demo")
+            writer.build([b"BT\n/F1 10 Tf\n(hello) Tj\nET\n"], out_pdf)
+
+            blob = out_pdf.read_bytes()
+            self.assertTrue(blob.startswith(b"%PDF-1.4"))
+            self.assertIn(b"xref\n0 6\n", blob)
+            self.assertIn(b"startxref\n", blob)
+            self.assertTrue(blob.rstrip().endswith(b"%%EOF"))
+        finally:
+            try:
+                out_pdf.unlink(missing_ok=True)
+            except Exception:
+                pass
+            if tmp_root.exists() and not any(tmp_root.iterdir()):
+                shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    unittest.main()

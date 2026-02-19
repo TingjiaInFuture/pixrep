@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ from .scanner import RepoScanner
 
 # Pre-built translate table shared by all _ascii_safe calls.
 _ASCII_SAFE_TABLE = str.maketrans({"\t": "    ", "\r": ""})
+_NON_ASCII_RE = re.compile(r"[^\x20-\x7e\n]")
 
 
 DEFAULT_CORE_IGNORE_PATTERNS = [
@@ -50,7 +52,6 @@ class PackedFile:
     language: str
     size: int
     line_count: int
-    content: str
 
 
 def _git_ls_files(repo_root: Path) -> list[str] | None:
@@ -98,8 +99,9 @@ def collect_core_files(
         str(repo_root),
         max_file_size=max_file_size,
         extra_ignore=combined_ignore,
+        prefer_git_source=prefer_git,
     )
-    repo = scanner.scan(include_content=True)
+    repo = scanner.scan(include_content=False)
 
     # Optionally restrict to git-tracked files to mirror the old prefer_git
     # behaviour (skip vendor/build outputs present in the worktree but not
@@ -146,7 +148,6 @@ def collect_core_files(
                 language=info.language,
                 size=info.size,
                 line_count=info.line_count,
-                content=info.load_content(),
             )
         )
         stats["included"] += 1
@@ -156,15 +157,8 @@ def collect_core_files(
 
 
 def _ascii_safe(s: str) -> str:
-    # Uses module-level translate table; all other replacements in the loop.
-    out: list[str] = []
-    for ch in s.translate(_ASCII_SAFE_TABLE):
-        code = ord(ch)
-        if 32 <= code <= 126 or ch == "\n":
-            out.append(ch)
-        else:
-            out.append(f"\\u{code:04x}")
-    return "".join(out)
+    translated = s.translate(_ASCII_SAFE_TABLE)
+    return _NON_ASCII_RE.sub(lambda m: f"\\u{ord(m.group()):04x}", translated)
 
 
 def _wrap_line(line: str, max_cols: int) -> list[str]:
@@ -261,7 +255,13 @@ def pack_repo_to_one_pdf(
         header = f"[{idx:04d}] {f.rel_posix}  ({f.language}, {f.line_count} lines, {f.size} bytes)"
         emit(header)
         emit("-" * min(max_cols, max(10, len(header))))
-        for raw_line in f.content.split("\n"):
+        try:
+            file_text = f.abs_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            emit("(read failed)")
+            emit("")
+            continue
+        for raw_line in file_text.split("\n"):
             safe_line = _ascii_safe(raw_line.rstrip())
             if wrap:
                 for chunk in _wrap_line(safe_line, max_cols):

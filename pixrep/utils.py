@@ -39,6 +39,8 @@ def str_width(text: str, font_size: float) -> float:
     Note: caching full strings can create memory pressure for huge files.
     We only cache "short" strings; long strings are computed directly.
     """
+    if text.isascii():
+        return len(text) * font_size * 0.6
     if len(text) > 256:
         return sum(char_width(c, font_size) for c in text)
     return _str_width_cached(text, font_size)
@@ -46,6 +48,12 @@ def str_width(text: str, font_size: float) -> float:
 
 def truncate_to_width(text: str, font_size: float, max_width: float) -> str:
     """将字符串截断到不超过 max_width 像素宽度"""
+    if text.isascii():
+        max_chars = int(max_width / (font_size * 0.6))
+        if len(text) <= max_chars:
+            return text
+        return text[:max(0, max_chars)] + "…"
+
     w = 0.0
     for i, c in enumerate(text):
         w += char_width(c, font_size)

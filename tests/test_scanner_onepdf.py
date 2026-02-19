@@ -60,6 +60,26 @@ class TestScannerAndOnepdf(unittest.TestCase):
             except Exception:
                 pass
 
+    def test_scanner_metadata_only_lazy_load(self):
+        tmp_root = Path(__file__).resolve().parents[1] / ".test_scratch"
+        tmp_root.mkdir(parents=True, exist_ok=True)
+        root = tmp_root / f"repo_{uuid.uuid4().hex}"
+        try:
+            root.mkdir()
+            file_path = root / "lazy.py"
+            file_path.write_text("a\nb\nc", encoding="utf-8")
+
+            scanner = RepoScanner(str(root), max_file_size=1024)
+            repo = scanner.scan(include_content=False)
+            self.assertEqual(len(repo.files), 1)
+
+            info = repo.files[0]
+            self.assertEqual(info.content, "")
+            self.assertEqual(info.line_count, 3)
+            self.assertEqual(info.load_content(), "a\nb\nc")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

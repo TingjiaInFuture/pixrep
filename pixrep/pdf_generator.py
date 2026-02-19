@@ -79,11 +79,14 @@ class PDFGenerator:
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
             futures = {pool.submit(self._generate_file_pdf, info): info for info in pending}
-            for fut in as_completed(futures):
+            total = len(futures)
+            for index, fut in enumerate(as_completed(futures), start=1):
                 exc = fut.exception()
                 if exc:
                     info = futures[fut]
                     log.warning("  Failed to generate PDF for %s: %s", info.path, exc)
+                if index % 10 == 0 or index == total:
+                    log.info("  Progress: %d/%d files", index, total)
 
         log.info("")
         log.info("Done! Generated %d PDFs (+ index)", len(pending))

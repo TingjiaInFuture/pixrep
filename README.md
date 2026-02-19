@@ -27,6 +27,8 @@ Instead of feeding raw text that consumes massive context windows, **pixrep** co
 
 ## 🚀 Why Visual Code? 
 
+Traditional text tokenization is expensive. Visual encoding compresses structure efficiently.
+
 *Comparison in Google AI Studio (Gemini 3 Pro):*
 
 | **Raw Files (Text Input)** | **pixrep OnePDF (Visual Input)** |
