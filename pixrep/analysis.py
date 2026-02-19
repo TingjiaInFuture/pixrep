@@ -2,12 +2,14 @@ import ast
 import concurrent.futures
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
 from collections import defaultdict
 from pathlib import Path
 
+from .file_utils import normalize_posix_path
 from .models import FileInfo, LintIssue, RepoInfo, SemanticMap
 
 JS_CLASS_PAT = re.compile(
@@ -22,6 +24,8 @@ JS_FN_PATS = (
 JS_CALL_PAT = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
 
 log = logging.getLogger(__name__)
+
+MAX_SEMANTIC_LINES = 24
 
 
 class CodeInsightEngine:
@@ -40,11 +44,28 @@ class CodeInsightEngine:
     def enrich_repo(self):
         """Populate semantic maps and lint issues onto RepoInfo.file entries."""
         lint_map = self._collect_lint_issues() if self.enable_lint_heatmap else {}
+        lint_map_ci = {k.lower(): v for k, v in lint_map.items()} if os.name == "nt" else {}
+        matched = 0
         for info in self.repo.files:
             info.semantic_map = (
                 self._build_semantic_map(info) if self.enable_semantic_minimap else SemanticMap()
             )
-            info.lint_issues = lint_map.get(self._normalize_path(info.path), [])
+            key = self._normalize_path(info.path)
+            issues = lint_map.get(key)
+            if issues is None and lint_map_ci:
+                issues = lint_map_ci.get(key.lower())
+            info.lint_issues = issues or []
+            if info.lint_issues:
+                matched += 1
+
+        if self.enable_lint_heatmap and lint_map and matched == 0:
+            log.warning(
+                "Linter found %d files with issues but none matched scanned files. Path normalization mismatch?",
+                len(lint_map),
+            )
+            sample_lint = next(iter(lint_map))
+            sample_file = self._normalize_path(self.repo.files[0].path) if self.repo.files else "(none)"
+            log.debug("sample lint path=%r, sample file path=%r", sample_lint, sample_file)
 
     def _collect_lint_issues(self) -> dict[str, list[LintIssue]]:
         issues: dict[str, list[LintIssue]] = defaultdict(list)
@@ -222,11 +243,14 @@ class CodeInsightEngine:
                 lines.append(f"{src} -> {dst}")
         if not lines:
             lines = ["(no classes/functions detected)"]
+
+        lines, truncated = self._limit_semantic_lines(lines)
         return SemanticMap(
             kind="uml+callgraph" if classes else "callgraph",
-            lines=lines[:16],
+            lines=lines,
             node_count=len(defined),
             edge_count=len(edges),
+            truncated=truncated,
         )
 
     def _js_semantic_map(self, content: str) -> SemanticMap:
@@ -263,19 +287,29 @@ class CodeInsightEngine:
                 lines.append(f"{src} -> {dst}")
         if not lines:
             lines = ["(no symbols detected)"]
+
+        lines, truncated = self._limit_semantic_lines(lines)
         return SemanticMap(
             kind="uml+callgraph" if classes else "callgraph",
-            lines=lines[:16],
+            lines=lines,
             node_count=len(funcs) + len(classes),
             edge_count=len(call_edges),
+            truncated=truncated,
         )
 
     def _generic_semantic_map(self, content: str, language: str) -> SemanticMap:
-        if language == "text":
-            return SemanticMap(kind="none", lines=["(semantic minimap not available)"])
+        if language in {"text", "json", "yaml", "toml", "markdown", "ini"}:
+            return SemanticMap(kind="none", lines=[])
         sigs = re.findall(r"^\s*(?:def|fn|func|function)\s+([A-Za-z_]\w*)", content, flags=re.MULTILINE)
         lines = ["Functions:"] + [f"  - {name}()" for name in sigs[:12]] if sigs else ["(no symbols detected)"]
-        return SemanticMap(kind="callgraph", lines=lines[:16], node_count=len(sigs), edge_count=0)
+        lines, truncated = self._limit_semantic_lines(lines)
+        return SemanticMap(
+            kind="callgraph",
+            lines=lines,
+            node_count=len(sigs),
+            edge_count=0,
+            truncated=truncated,
+        )
 
     @staticmethod
     def _ruff_severity(code: str) -> str:
@@ -288,12 +322,16 @@ class CodeInsightEngine:
     def _relative_to_repo(self, path_value: str) -> str | None:
         if not path_value:
             return None
+
+        root = self.repo.root.resolve()
+        p = Path(path_value)
+        candidate = p if p.is_absolute() else (root / p)
         try:
-            root = self.repo.root.resolve()
-            p = Path(path_value)
-            if not p.is_absolute():
-                p = root / p
-            resolved = p.resolve()
+            resolved = candidate.resolve()
+        except OSError:
+            return None
+
+        try:
             if not resolved.is_relative_to(root):
                 return None
             rel = resolved.relative_to(root)
@@ -302,8 +340,14 @@ class CodeInsightEngine:
             return None
 
     @staticmethod
-    def _normalize_path(path_value: Path) -> str:
-        return str(path_value).replace("\\", "/")
+    def _normalize_path(path_value: str | Path) -> str:
+        return normalize_posix_path(path_value)
+
+    @staticmethod
+    def _limit_semantic_lines(lines: list[str]) -> tuple[list[str], bool]:
+        if len(lines) > MAX_SEMANTIC_LINES:
+            return lines[:MAX_SEMANTIC_LINES], True
+        return lines, False
 
     @staticmethod
     def _ast_name(node: ast.AST) -> str:
@@ -369,7 +413,7 @@ class CodeInsightEngine:
 class _PyCallVisitor(ast.NodeVisitor):
     def __init__(self, defined_symbols: set[str]):
         self.defined = defined_symbols
-        self.scope: list[str] = ["<module>"]
+        self.scope: list[str] = ["(module)"]
         self.class_stack: list[str] = []
         self.edges: set[tuple[str, str]] = set()
 

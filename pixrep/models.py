@@ -10,6 +10,7 @@ class SemanticMap:
     lines: list[str] = field(default_factory=list)
     node_count: int = 0
     edge_count: int = 0
+    truncated: bool = False
 
 
 @dataclass

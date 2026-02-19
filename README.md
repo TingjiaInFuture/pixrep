@@ -1,15 +1,15 @@
-# pixrep
-
 <div align="center">
+
+# pixrep
 
 # 📉 SAVE UP TO 90% TOKENS
 
 ### Turn Codebases into **Visual Context** for Multimodal LLMs
-*According to **DeepSeek-OCR** research and local benchmarking, visual encoding (PDF) outperforms plain-text ingestion for massive repositories.*
+
 
 [![PyPI version](https://img.shields.io/pypi/v/pixrep?color=blue)](https://pypi.org/project/pixrep/)
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub Stars](https://img.shields.io/github/stars/TingjiaInFuture/pixrep?style=social)](https://github.com/TingjiaInFuture/pixrep)
 
 </div>
 
@@ -25,18 +25,24 @@ Instead of feeding raw text that consumes massive context windows, **pixrep** co
 *   **Test for Free:** Easily share your entire codebase with premium models (like **Claude Opus 4.6**) on platforms like **arena.ai** without hitting text limits.
 
 
-## 🚀 Why Visual Code? (The 90% Claim)
+## 🚀 Why Visual Code? 
 
-Traditional RAG (Retrieval-Augmented Generation) relies on raw text. However, recent research (including the **DeepSeek-OCR** paper) indicates that visual encoders can represent dense information more efficiently than textual tokenizers.
+*Comparison in Google AI Studio (Gemini 3 Pro):*
 
-*   **Text Tokenization:** 1 page of dense code ≈ 500-800 text tokens.
-*   **Visual Tokenization:** 1 page of code (PDF image) ≈ Fixed patch count (e.g., 85-256 tokens depending on the model).
+| **Raw Files (Text Input)** | **pixrep OnePDF (Visual Input)** |
+| :---: | :---: |
+| ![Raw Files Usage](LINK_TO_IMAGE_2) | ![OnePDF Usage](LINK_TO_IMAGE_1) |
+| **31,812 Tokens** ❌<br>*(Cluttered context)* | **19,041 Tokens** ✅<br>*(Clean, single file)* |
 
-**pixrep** creates a layered PDF structure:
-1.  **Macro View (`00_INDEX.pdf`):** A visual map of the directory tree and project statistics.
-2.  **Micro View (File PDFs):** Syntax-highlighted, line-numbered renderings of individual code files.
+## 🎓 Academic Backing 
 
-This approach enables an Agentic workflow: *Read the Index -> Identify relevant files -> Ingest only specific PDFs.*
+The core philosophy of **pixrep** (rendering code → PDF with syntax highlighting + heatmaps) has been validated by top-tier papers from 2025–2026:
+
+*   **Text or Pixels? It Takes Half** (arXiv:2510.18279): Rendering text as images saves **~50% decoder tokens** while maintaining or improving performance.
+*   **DeepSeek-OCR** (arXiv:2510.18234): Visual encoding achieves **10–20× compression ratios** for dense, structured text.
+*   **CodeOCR** (arXiv:2602.01785, Feb 2026): A **code-specific** study showing that visual input with syntax highlighting improves performance even at **4× compression**. In tasks like clone detection, the visual approach outperforms plain text.
+
+**Verdict:** In the multimodal era, the optimal way to feed code is via **"visual perception" rather than "text reading."**
 
 ## ✨ Features
 
@@ -60,10 +66,16 @@ pip install pixrep
 ## 🛠️ Usage
 
 ### Quick Start
-Convert the current directory to PDFs in the default output folder (`./pixrep_output/<repo_name>`):
+Convert the current directory to hierarchial PDFs in `./pixrep_output/<repo_name>`:
 
 ```bash
 pixrep .
+```
+
+**Or pack everything into a single, token-optimized PDF (Recommended for LLMs):**
+
+```bash
+pixrep onepdf .
 ```
 
 ### Common Commands
@@ -153,4 +165,3 @@ We welcome contributions! Please feel free to submit a Pull Request.
 ## 📄 License
 
 Distributed under the MIT License. See `LICENSE` for more information.
-

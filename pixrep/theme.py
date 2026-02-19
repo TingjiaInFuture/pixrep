@@ -1,4 +1,4 @@
-from reportlab.lib.colors import Color, HexColor
+from reportlab.lib.colors import HexColor
 
 COLORS = {
     "bg": HexColor("#282c34"),
@@ -20,6 +20,6 @@ COLORS = {
     "green": HexColor("#98c379"),
     "header_bg": HexColor("#21252b"),
     "tag": HexColor("#e06c75"),
-    "heat_high": Color(0.98, 0.36, 0.36, alpha=0.30),
-    "heat_medium": Color(0.98, 0.76, 0.26, alpha=0.25),
+    "heat_high": HexColor("#673A40"),
+    "heat_medium": HexColor("#524733"),
 }

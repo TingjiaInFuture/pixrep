@@ -14,7 +14,7 @@ from reportlab.platypus import (
 )
 
 from .analysis import CodeInsightEngine
-from .flowables import CodeBlockChunk, HeaderBar, SemanticMiniMap, StatBox
+from .flowables import CodeBlockChunk, HeaderBar, LintLegend, SemanticMiniMap, StatBox
 from .fonts import FontRegistry, register_fonts
 from .models import FileInfo, RepoInfo
 from .theme import COLORS
@@ -313,12 +313,13 @@ class PDFGenerator:
             story.append(Paragraph(item, meta))
 
         if self.enable_semantic_minimap:
-            stats = (
-                f"<b>Semantic Map:</b> {xml_escape(file_info.semantic_map.kind)} "
-                f"({file_info.semantic_map.node_count} nodes / "
-                f"{file_info.semantic_map.edge_count} edges)"
-            )
-            story.append(Paragraph(stats, meta))
+            if file_info.semantic_map.kind != "none":
+                stats = (
+                    f"<b>Semantic Map:</b> {xml_escape(file_info.semantic_map.kind)} "
+                    f"({file_info.semantic_map.node_count} nodes / "
+                    f"{file_info.semantic_map.edge_count} edges)"
+                )
+                story.append(Paragraph(stats, meta))
 
         lint_counts = self._lint_counts(file_info)
         if self.enable_lint_heatmap:
@@ -330,18 +331,41 @@ class PDFGenerator:
 
         story.append(Spacer(1, 4 * mm))
 
-        if self.enable_semantic_minimap:
-            story.append(SemanticMiniMap(file_info.semantic_map, fonts=self.fonts, width=cw))
+        legend_budget = 0
+        minimap_budget = 0
+        minimap_spacer_budget = 0
+        if self.enable_semantic_minimap and file_info.semantic_map.kind != "none":
+            minimap = SemanticMiniMap(file_info.semantic_map, fonts=self.fonts, width=cw)
+            _, minimap_h = minimap.wrap(cw, self.avail_height)
+            story.append(minimap)
             story.append(Spacer(1, 4 * mm))
+            minimap_budget = minimap_h
+            minimap_spacer_budget = 4 * mm
+
+        if self.enable_lint_heatmap and (lint_counts["high"] + lint_counts["medium"]) > 0:
+            legend = LintLegend(fonts=self.fonts, width=cw)
+            _, legend_h = legend.wrap(cw, self.avail_height)
+            story.append(Spacer(1, 2 * mm))
+            story.append(legend)
+            story.append(Spacer(1, 2 * mm))
+            legend_budget = legend_h + 4 * mm
 
         all_lines = file_info.load_content().split("\n")
-        # Rough budget for header + metadata blocks on the first page before code starts.
-        # This doesn't need to be exact; it's a layout heuristic.
+        base_meta_lines = 4
+        semantic_meta_lines = 1 if (self.enable_semantic_minimap and file_info.semantic_map.kind != "none") else 0
+        lint_meta_lines = 1 if self.enable_lint_heatmap else 0
+
         header_budget = 28
-        spacing_budget = 4 * mm + 8 * mm
-        meta_lines_budget = 6 * 14
-        minimap_budget = 50
-        first_page_used = header_budget + spacing_budget + meta_lines_budget + minimap_budget
+        spacing_budget = 4 * mm + 4 * mm
+        meta_lines_budget = (base_meta_lines + semantic_meta_lines + lint_meta_lines) * 14
+        first_page_used = (
+            header_budget
+            + spacing_budget
+            + meta_lines_budget
+            + legend_budget
+            + minimap_budget
+            + minimap_spacer_budget
+        )
         first_avail = self.avail_height - first_page_used
         later_avail = self.avail_height - 10
 
@@ -378,7 +402,10 @@ class PDFGenerator:
             offset += n
             first_chunk = False
             if offset < len(all_lines):
-                story.append(Spacer(1, 1))
+                if line_heat and (line_heat.get(offset) or line_heat.get(offset + 1)):
+                    story.append(Spacer(1, 0))
+                else:
+                    story.append(Spacer(1, 1))
 
     def _file_pdf_name(self, info: FileInfo) -> str:
         safe_path = str(info.path).replace("/", "_").replace("\\", "_")
