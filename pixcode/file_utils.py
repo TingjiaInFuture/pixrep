@@ -73,7 +73,7 @@ def line_count_from_bytes(blob: bytes) -> int:
 
 def detect_language(path_value: str | Path) -> str:
     """
-    Detect a language id used by pixcode.
+    Detect a language id used by pixrep.
 
     Supports both filenames (Dockerfile, Makefile, ...) and extension mapping.
     """

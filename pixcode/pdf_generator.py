@@ -110,7 +110,7 @@ class PDFGenerator:
         canvas.setFont(self.fonts.normal, 7)
         canvas.setFillColor(HexColor("#999999"))
         canvas.drawString(self.margin, 10 * mm,
-                          f"pixcode · {self.repo.name}")
+                          f"pixrep · {self.repo.name}")
         canvas.drawRightString(self.page_width - self.margin, 10 * mm,
                                f"Page {doc.page}")
         canvas.restoreState()

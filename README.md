@@ -1,4 +1,4 @@
-# pixcode
+# pixrep
 
 <div align="center">
 
@@ -7,7 +7,7 @@
 ### Turn Codebases into **Visual Context** for Multimodal LLMs
 *According to **DeepSeek-OCR** research and local benchmarking, visual encoding (PDF) outperforms plain-text ingestion for massive repositories.*
 
-[![PyPI version](https://img.shields.io/pypi/v/pixcode?color=blue)](https://pypi.org/project/pixcode/)
+[![PyPI version](https://img.shields.io/pypi/v/pixrep?color=blue)](https://pypi.org/project/pixrep/)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -17,9 +17,9 @@
 
 ## 📖 Introduction
 
-**pixcode** is a developer tool designed to bridge the gap between large code repositories and Multimodal Large Language Models.
+**pixrep** is a developer tool designed to bridge the gap between large code repositories and Multimodal Large Language Models.
 
-Instead of feeding raw text that consumes massive context windows, **pixcode** converts your repository into a **structured, hierarchical set of PDFs**. This allows you to:
+Instead of feeding raw text that consumes massive context windows, **pixrep** converts your repository into a **structured, hierarchical set of PDFs**. This allows you to:
 
 *   **Save 90% Tokens:** Visual encoding is far more efficient than text tokenization.
 *   **Test for Free:** Easily share your entire codebase with premium models (like **Claude Opus 4.6**) on platforms like **arena.ai** without hitting text limits.
@@ -32,7 +32,7 @@ Traditional RAG (Retrieval-Augmented Generation) relies on raw text. However, re
 *   **Text Tokenization:** 1 page of dense code ≈ 500-800 text tokens.
 *   **Visual Tokenization:** 1 page of code (PDF image) ≈ Fixed patch count (e.g., 85-256 tokens depending on the model).
 
-**pixcode** creates a layered PDF structure:
+**pixrep** creates a layered PDF structure:
 1.  **Macro View (`00_INDEX.pdf`):** A visual map of the directory tree and project statistics.
 2.  **Micro View (File PDFs):** Syntax-highlighted, line-numbered renderings of individual code files.
 
@@ -54,28 +54,28 @@ This approach enables an Agentic workflow: *Read the Index -> Identify relevant 
 ## 📦 Installation
 
 ```bash
-pip install pixcode
+pip install pixrep
 ```
 
 ## 🛠️ Usage
 
 ### Quick Start
-Convert the current directory to PDFs in the default output folder (`./pixcode_output/<repo_name>`):
+Convert the current directory to PDFs in the default output folder (`./pixrep_output/<repo_name>`):
 
 ```bash
-pixcode .
+pixrep .
 ```
 
 ### Common Commands
 
 **Generate PDFs for a specific repo:**
 ```bash
-pixcode generate /path/to/my-project -o ./my-project-pdfs
+pixrep generate /path/to/my-project -o ./my-project-pdfs
 ```
 
 **Pack core code into a single minimized PDF (all-in-one):**
 ```bash
-pixcode onepdf /path/to/my-project -o ./ONEPDF_CORE.pdf
+pixrep onepdf /path/to/my-project -o ./ONEPDF_CORE.pdf
 ```
 Notes:
 * Defaults to `git ls-files` (tracked files) when available.
@@ -83,13 +83,13 @@ Notes:
 
 **Preview structure and stats (without generating PDFs):**
 ```bash
-pixcode list /path/to/my-project
+pixrep list /path/to/my-project
 ```
 `list` mode now uses lightweight scanning (no file content decode), so large repos respond significantly faster.
 
 **Show only top 5 languages in the summary:**
 ```bash
-pixcode list . --top-languages 5
+pixrep list . --top-languages 5
 ```
 
 ### CLI Reference
@@ -97,7 +97,7 @@ pixcode list . --top-languages 5
 | Argument | Description | Default |
 | :--- | :--- | :--- |
 | `repo` | Path to the code repository. | `.` (Current Dir) |
-| `-o`, `--output` | Directory to save the generated PDFs. | `./pixcode_output/<repo>` |
+| `-o`, `--output` | Directory to save the generated PDFs. | `./pixrep_output/<repo>` |
 | `--max-size` | Max file size to process (in KB). Files larger than this are skipped. | `512` KB |
 | `--ignore` | Additional glob patterns to ignore (e.g., `*.json` `test/*`). | `[]` |
 | `--index-only` | Generate only the `00_INDEX.pdf` (Directory tree & stats). | `False` |
@@ -109,31 +109,31 @@ pixcode list . --top-languages 5
 
 ## ⚙️ Performance Notes
 
-`pixcode` now applies two execution paths:
+`pixrep` now applies two execution paths:
 
-1. **Light scan path** (`pixcode list`, `pixcode generate --index-only`, `--list-only`):
+1. **Light scan path** (`pixrep list`, `pixrep generate --index-only`, `--list-only`):
    only metadata and line counts are collected; file content is not loaded.
-2. **Full scan path** (regular `pixcode generate`):
+2. **Full scan path** (regular `pixrep generate`):
    file content is decoded only when needed for PDF rendering.
 
 This reduces memory pressure and disk I/O for repository exploration workflows.
 
 ## 📂 Output Structure
 
-After running `pixcode .`, you will get a folder structure optimized for LLM upload:
+After running `pixrep .`, you will get a folder structure optimized for LLM upload:
 
 ```text
-pixcode_output/pixcode/
+pixrep_output/pixrep/
 ├── 00_INDEX.pdf             # <--- Upload this first! Contains tree & stats
 ├── 001_LICENSE.pdf
 ├── 002_README.md.pdf
-├── 003_pixcode___init__.py.pdf
-├── 005_pixcode_cli.py.pdf
+├── 003_pixrep___init__.py.pdf
+├── 005_pixrep_cli.py.pdf
 └── ...
 ```
 
 ## 🧩 Supported Languages
-Pixcode automatically detects and highlights syntax for:
+pixrep automatically detects and highlights syntax for:
 *   **Core:** Python, C, C++, Java, Rust, Go
 *   **Web:** HTML, CSS, JavaScript, TypeScript, Vue, Svelte
 *   **Config:** JSON, YAML, TOML, XML, Dockerfile, Ini

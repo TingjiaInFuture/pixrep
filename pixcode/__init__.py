@@ -1,4 +1,4 @@
-"""pixcode package."""
+"""pixrep package."""
 
 from .version import __version__
 

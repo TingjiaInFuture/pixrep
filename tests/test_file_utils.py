@@ -3,7 +3,7 @@ from pathlib import Path
 import shutil
 import uuid
 
-from pixcode.file_utils import (
+from pixrep.file_utils import (
     build_tree,
     detect_language,
     is_probably_text,

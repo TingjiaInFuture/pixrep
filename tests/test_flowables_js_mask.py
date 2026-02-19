@@ -1,6 +1,6 @@
 import unittest
 
-from pixcode.flowables import CodeBlockChunk
+from pixrep.flowables import CodeBlockChunk
 
 
 class _DummyFonts:

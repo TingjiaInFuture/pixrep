@@ -3,8 +3,8 @@ from pathlib import Path
 import shutil
 import uuid
 
-from pixcode.scanner import RepoScanner
-from pixcode.onepdf_pack import pack_repo_to_one_pdf
+from pixrep.scanner import RepoScanner
+from pixrep.onepdf_pack import pack_repo_to_one_pdf
 
 
 class TestScannerAndOnepdf(unittest.TestCase):

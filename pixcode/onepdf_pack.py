@@ -234,7 +234,7 @@ def pack_repo_to_one_pdf(
             flush_page()
 
     # ── Header ────────────────────────────────────────────────────────
-    emit("pixcode onepdf")
+    emit("pixrep onepdf")
     emit(f"repo: {repo_root.name}")
     emit(f"generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     emit(f"files: {len(files)}")

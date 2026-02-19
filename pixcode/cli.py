@@ -46,7 +46,7 @@ def _build_common_parser() -> argparse.ArgumentParser:
 
 def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentParser]]:
     parser = argparse.ArgumentParser(
-        prog="pixcode",
+        prog="pixrep",
         description=(
             "Convert code repositories into hierarchical PDFs for LLM collaboration "
             "/ 将代码仓库转换为分层 PDF 以支持 LLM 协作"
@@ -54,14 +54,14 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""
 Examples:
-  pixcode .                                # Backward-compatible, same as: pixcode generate .
-  pixcode generate /path/to/repo -o ./pdfs
-  pixcode list . --top-languages 10
-  pixcode help generate
+  pixrep .                                # Backward-compatible, same as: pixrep generate .
+  pixrep generate /path/to/repo -o ./pdfs
+  pixrep list . --top-languages 10
+  pixrep help generate
         """,
     )
     parser.add_argument(
-        "-V", "--version", action="version", version=f"pixcode {__version__}"
+        "-V", "--version", action="version", version=f"pixrep {__version__}"
     )
 
     common = _build_common_parser()
@@ -75,7 +75,7 @@ Examples:
     )
     generate_parser.add_argument(
         "-o", "--output", default=None,
-        help="Output directory (default: ./pixcode_output/<repo>) / 输出目录",
+        help="Output directory (default: ./pixrep_output/<repo>) / 输出目录",
     )
     generate_parser.add_argument(
         "--index-only", action="store_true",
@@ -157,7 +157,7 @@ Examples:
             "-o",
             "--output",
             default=None,
-            help="Output PDF path (default: ./pixcode_output/<repo>/ONEPDF_CORE.pdf) / 输出 PDF 路径",
+            help="Output PDF path (default: ./pixrep_output/<repo>/ONEPDF_CORE.pdf) / 输出 PDF 路径",
         )
         p.add_argument(
             "--no-core-only",
@@ -315,7 +315,7 @@ def _run_generate(args: argparse.Namespace) -> int:
         _print_repo_list(repo)
         return 0
 
-    output_dir = args.output or f"./pixcode_output/{repo.name}"
+    output_dir = args.output or f"./pixrep_output/{repo.name}"
     generator = PDFGenerator(
         repo,
         output_dir,
@@ -351,7 +351,7 @@ def _run_onepdf(args: argparse.Namespace) -> int:
 
     out_pdf = args.output
     if not out_pdf:
-        out_pdf = f"./pixcode_output/{repo_path.name}/ONEPDF_CORE.pdf"
+        out_pdf = f"./pixrep_output/{repo_path.name}/ONEPDF_CORE.pdf"
 
     stats = pack_repo_to_one_pdf(
         repo_root=repo_path,
@@ -397,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
     raw_args = sys.argv[1:] if argv is None else argv
     parser, commands = build_parser()
 
-    # Better error for `pixcode some_word` where `some_word` isn't a path.
+    # Better error for `pixrep some_word` where `some_word` isn't a path.
     known_commands = {"generate", "list", "help", "onepdf", "allinone"}
     if raw_args:
         first = raw_args[0]

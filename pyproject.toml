@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pixcode"
+name = "pixrep"
 dynamic = ["version"]
 description = "Convert code repositories into structured PDF collections for LLM collaboration."
 readme = "README.md"
@@ -11,10 +11,10 @@ requires-python = ">=3.10"
 dependencies = ["reportlab>=3.6"]
 
 [project.scripts]
-pixcode = "pixcode.cli:main"
+pixrep = "pixrep.cli:main"
 
 [tool.setuptools]
-packages = ["pixcode"]
+packages = ["pixrep"]
 
 [tool.setuptools.dynamic]
-version = {attr = "pixcode.version.__version__"}
+version = {attr = "pixrep.version.__version__"}

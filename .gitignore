@@ -10,7 +10,7 @@ __pycache__/
 venv/
 env/
 
-pixcode_output/
+pixrep_output/
 dist/
 build/
 *.egg-info/
