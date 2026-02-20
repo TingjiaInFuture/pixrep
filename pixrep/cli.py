@@ -1,11 +1,13 @@
 import argparse
 import logging
+import re
 import sys
 from pathlib import Path
 
 from .pdf_generator import PDFGenerator
 from .scanner import RepoScanner
 from .onepdf import pack_repo_to_one_pdf
+from .file_utils import normalize_posix_path
 from .models import RepoInfo
 from .version import __version__
 
@@ -151,8 +153,92 @@ Examples:
     help_parser.add_argument(
         "topic",
         nargs="?",
-        choices=["generate", "list", "onepdf", "allinone"],
+        choices=["generate", "list", "query", "onepdf", "allinone"],
         help="Command name / 命令名",
+    )
+
+    query_parser = subparsers.add_parser(
+        "query",
+        parents=[common],
+        help="Search code and render matching snippets / 搜索代码并渲染匹配片段",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    query_parser.add_argument(
+        "-q",
+        "--query",
+        required=True,
+        help="Search pattern (regex or literal with --fixed) / 搜索模式",
+    )
+    query_parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Output file path (default: ./pixrep_output/<repo>/QUERY_<pattern>.pdf)",
+    )
+    query_parser.add_argument(
+        "--format",
+        choices=["pdf", "png"],
+        default="pdf",
+        help="Output format (default: pdf)",
+    )
+    query_parser.add_argument(
+        "--png-dpi",
+        type=int,
+        default=150,
+        help="DPI for PNG rendering",
+    )
+    query_parser.add_argument(
+        "--fixed",
+        action="store_true",
+        help="Treat pattern as literal string / 将模式视为纯文本",
+    )
+    query_parser.add_argument(
+        "--case-sensitive",
+        action="store_true",
+        help="Case-sensitive search / 区分大小写搜索",
+    )
+    query_parser.add_argument(
+        "--context",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Context lines around each match (default: 5)",
+    )
+    query_parser.add_argument(
+        "--max-results",
+        type=int,
+        default=200,
+        help="Maximum match results from search engine (default: 200)",
+    )
+    query_parser.add_argument(
+        "--max-snippet-lines",
+        type=int,
+        default=60,
+        help="Maximum lines per snippet (default: 60)",
+    )
+    query_parser.add_argument(
+        "--glob",
+        nargs="*",
+        default=[],
+        metavar="PATTERN",
+        help="File glob filters, e.g. '*.py' '*.js'",
+    )
+    query_parser.add_argument(
+        "--type-filter",
+        nargs="*",
+        default=[],
+        metavar="TYPE",
+        help="ripgrep type filters, e.g. py js rust",
+    )
+    query_parser.add_argument(
+        "--semantic",
+        action="store_true",
+        help="Use AST-based semantic symbol search (Python only)",
+    )
+    query_parser.add_argument(
+        "--tui",
+        action="store_true",
+        help="Interactive terminal preview before rendering",
     )
 
     def _add_onepdf_parser(name: str, help_text: str) -> argparse.ArgumentParser:
@@ -226,6 +312,7 @@ Examples:
     commands = {
         "generate": generate_parser,
         "list": list_parser,
+        "query": query_parser,
         "help": help_parser,
         "onepdf": onepdf_parser,
         "allinone": allinone_parser,
@@ -237,7 +324,7 @@ def _normalize_legacy_args(argv: list[str]) -> list[str]:
     if not argv:
         return ["generate"]
 
-    known_commands = {"generate", "list", "help", "onepdf", "allinone"}
+    known_commands = {"generate", "list", "query", "help", "onepdf", "allinone"}
     first = argv[0]
     if first in known_commands:
         return argv
@@ -397,6 +484,100 @@ def _run_onepdf(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_query(args: argparse.Namespace) -> int:
+    from .query import ContextExtractor, RipgrepSearcher, SemanticSearcher
+    from .query_renderer import QueryResultRenderer
+    from .query_tui import QueryPreviewTUI
+
+    repo, code = _scan_repo(args, include_content=False)
+    if code != 0 or repo is None or not repo.files:
+        return code
+
+    if args.semantic:
+        semantic_searcher = SemanticSearcher(repo=repo, max_results=args.max_results)
+        matches = semantic_searcher.search(
+            args.query,
+            fixed_strings=args.fixed,
+            case_sensitive=args.case_sensitive,
+            file_globs=args.glob or None,
+        )
+    else:
+        searcher = RipgrepSearcher(
+            repo_root=repo.root,
+            max_results=args.max_results,
+        )
+        if not searcher.available:
+            log.warning(
+                "ripgrep (rg) is not installed. Install it for best performance. "
+                "Falling back to basic Python search..."
+            )
+        matches = searcher.search(
+            args.query,
+            file_globs=args.glob or None,
+            type_filters=args.type_filter or None,
+            fixed_strings=args.fixed,
+            case_sensitive=args.case_sensitive,
+        )
+
+    if not matches:
+        log.info("No matches found for: %s", args.query)
+        return 0
+
+    scanned_paths = {normalize_posix_path(info.path) for info in repo.files}
+    matches = [m for m in matches if m.rel_path in scanned_paths]
+    if not matches:
+        log.info(
+            "Matches were found only in files excluded by scanner. "
+            "Try adjusting --ignore/--glob options."
+        )
+        return 0
+
+    log.info("Found %d matches", len(matches))
+
+    extractor = ContextExtractor(
+        repo=repo,
+        context_lines=args.context,
+        max_snippet_lines=args.max_snippet_lines,
+    )
+    snippets = extractor.extract(matches)
+    if not snippets:
+        log.info("No snippets could be extracted for: %s", args.query)
+        return 0
+
+    if args.tui:
+        if not sys.stdin.isatty():
+            log.warning("--tui requested but stdin is not interactive; continuing without preview")
+        else:
+            tui = QueryPreviewTUI(snippets=snippets, query=args.query)
+            tui_result = tui.run()
+            if not tui_result.should_render:
+                log.info("Render canceled in TUI preview")
+                return 0
+            snippets = [snippets[i] for i in tui_result.selected_indices]
+            if not snippets:
+                log.info("No snippets selected; skipped rendering")
+                return 0
+
+    if args.output:
+        out_path = Path(args.output)
+    else:
+        safe_q = args.query[:30].replace("/", "_").replace("\\", "_")
+        safe_q = re.sub(r"[^\w\-_.]", "_", safe_q)
+        out_path = Path(f"./pixrep_output/{repo.name}/QUERY_{safe_q}.{args.format}")
+
+    renderer = QueryResultRenderer(
+        repo=repo,
+        query=args.query,
+        snippets=snippets,
+        output_path=out_path,
+        output_format=args.format,
+        png_dpi=args.png_dpi,
+    )
+    renderer.render()
+    log.info("Query result: %s", out_path.resolve())
+    return 0
+
+
 def _run_help(
     args: argparse.Namespace,
     parser: argparse.ArgumentParser,
@@ -414,7 +595,7 @@ def main(argv: list[str] | None = None) -> int:
     parser, commands = build_parser()
 
     # Better error for `pixrep some_word` where `some_word` isn't a path.
-    known_commands = {"generate", "list", "help", "onepdf", "allinone"}
+    known_commands = {"generate", "list", "query", "help", "onepdf", "allinone"}
     if raw_args:
         first = raw_args[0]
         looks_like_path = (
@@ -438,6 +619,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "list":
         return _run_list(args)
+    if args.command == "query":
+        return _run_query(args)
     if args.command in {"onepdf", "allinone"}:
         return _run_onepdf(args)
     if args.command == "help":

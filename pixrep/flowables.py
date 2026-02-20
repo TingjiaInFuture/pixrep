@@ -180,11 +180,18 @@ class CodeBlockChunk(Flowable):
 
             level = self.line_heat.get(line_no)
             if level:
-                heat_color = COLORS["heat_high"] if level == "high" else COLORS["heat_medium"]
+                if level == "high":
+                    heat_color = COLORS["heat_high"]
+                    indicator_color = COLORS["red"]
+                elif level == "match":
+                    heat_color = COLORS.get("heat_match", COLORS["heat_medium"])
+                    indicator_color = COLORS["accent"]
+                else:
+                    heat_color = COLORS["heat_medium"]
+                    indicator_color = COLORS["number"]
                 canv.setFillColor(heat_color)
                 canv.rect(0, line_bottom, self.block_width, self.line_height, fill=1, stroke=0)
 
-                indicator_color = COLORS["red"] if level == "high" else COLORS["number"]
                 canv.setFillColor(indicator_color)
                 canv.rect(line_no_width - 3, line_bottom, 3, self.line_height, fill=1, stroke=0)
 

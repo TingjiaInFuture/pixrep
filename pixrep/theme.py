@@ -22,4 +22,5 @@ COLORS = {
     "tag": HexColor("#e06c75"),
     "heat_high": HexColor("#673A40"),
     "heat_medium": HexColor("#524733"),
+    "heat_match": HexColor("#2B4F6F"),
 }

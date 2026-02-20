@@ -63,6 +63,7 @@ The core philosophy of **pixrep** (rendering code → PDF with syntax highlighti
 *   **🎨 Syntax Highlighting:** Supports 50+ languages (Python, JS, Rust, Go, C++, etc.) with a "One Dark" inspired theme.
 *   **🧠 Semantic Minimap:** Auto-generates per-file micro UML / call graph summaries to expose structure at a glance.
 *   **🔥 Linter Heatmap:** Integrates `ruff` / `eslint` findings and marks risky lines with red/yellow visual overlays.
+*   **🔎 Query Mode:** Search by text or semantic symbols, then render only matched snippets to PDF/PNG.
 *   **🗂️ Hierarchical Output:** Generates a clean `00_INDEX.pdf` summary and separate files for granular access.
 *   **🌏 CJK Support:** Built-in font fallback for Chinese/Japanese/Korean characters (Auto-detects OS fonts).
 *   **🛡️ Smart Filtering:** Respects `.gitignore` patterns and supports custom ignore rules.
@@ -114,6 +115,16 @@ pixrep list /path/to/my-project
 **Show only top 5 languages in the summary:**
 ```bash
 pixrep list . --top-languages 5
+```
+
+**Query and render only matching snippets:**
+```bash
+pixrep query . -q "cache" --glob "*.py" --format png
+```
+
+**Semantic query (Python symbols) with interactive terminal preview:**
+```bash
+pixrep query . -q "CodeInsight" --semantic --tui
 ```
 
 ### CLI Reference
