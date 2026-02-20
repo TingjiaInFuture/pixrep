@@ -56,6 +56,7 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
 Examples:
   pixrep .                                # Backward-compatible, same as: pixrep generate .
   pixrep generate /path/to/repo -o ./pdfs
+    pixrep generate . --format png          # Output as PNG long images
   pixrep list . --top-languages 10
   pixrep help generate
         """,
@@ -76,6 +77,19 @@ Examples:
     generate_parser.add_argument(
         "-o", "--output", default=None,
         help="Output directory (default: ./pixrep_output/<repo>) / 输出目录",
+    )
+    generate_parser.add_argument(
+        "--format",
+        choices=["pdf", "png"],
+        default="pdf",
+        help="Output format: pdf or png (default: pdf) / 输出格式",
+    )
+    generate_parser.add_argument(
+        "--png-dpi",
+        type=int,
+        default=150,
+        metavar="DPI",
+        help="DPI for PNG rendering (default: 150, only used with --format png) / PNG 渲染分辨率",
     )
     generate_parser.add_argument(
         "--index-only", action="store_true",
@@ -324,11 +338,13 @@ def _run_generate(args: argparse.Namespace) -> int:
         linter_timeout=args.linter_timeout,
         incremental=args.incremental,
         max_workers=args.workers,
+        output_format=args.format,
+        png_dpi=args.png_dpi,
     )
     if args.index_only:
         generator.generate_index_only()
         log.info("")
-        log.info("Done! Generated 1 PDF")
+        log.info("Done! Generated 1 %s", args.format.upper())
         return 0
 
     generator.generate_all()

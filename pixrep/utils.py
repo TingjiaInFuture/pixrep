@@ -60,3 +60,52 @@ def truncate_to_width(text: str, font_size: float, max_width: float) -> str:
         if w > max_width:
             return text[:i] + "…"
     return text
+
+
+def pdf_bytes_to_long_png(pdf_bytes: bytes, dpi: int = 150) -> bytes:
+    """将 PDF 字节流渲染为单张垂直拼接长图的 PNG 字节流。
+
+    Parameters
+    ----------
+    pdf_bytes : bytes
+        完整的 PDF 文件内容（内存中）。
+    dpi : int
+        渲染分辨率，默认 150。越高越清晰但文件越大。
+
+    Returns
+    -------
+    bytes
+        PNG 格式的图片字节流。
+    """
+    import fitz
+    from PIL import Image
+    import io
+
+    Image.MAX_IMAGE_PIXELS = None
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    images: list[Image.Image] = []
+    total_height = 0
+    max_width = 0
+
+    for page in doc:
+        pix = page.get_pixmap(dpi=dpi)
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        images.append(img)
+        total_height += pix.height
+        max_width = max(max_width, pix.width)
+
+    doc.close()
+
+    if not images:
+        canvas = Image.new("RGB", (1, 1), color="white")
+    else:
+        canvas = Image.new("RGB", (max_width, total_height), color="white")
+        y_offset = 0
+        for img in images:
+            canvas.paste(img, (0, y_offset))
+            y_offset += img.height
+
+    out_buf = io.BytesIO()
+    canvas.save(out_buf, format="PNG", optimize=True)
+    return out_buf.getvalue()

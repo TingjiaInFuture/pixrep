@@ -1,3 +1,4 @@
+import io
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -31,7 +32,9 @@ class PDFGenerator:
                  enable_lint_heatmap: bool = True,
                  linter_timeout: int = 20,
                  incremental: bool = False,
-                 max_workers: int | None = None):
+                 max_workers: int | None = None,
+                 output_format: str = "pdf",
+                 png_dpi: int = 150):
         self.repo = repo
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -45,6 +48,8 @@ class PDFGenerator:
         self.incremental = incremental
         # None → use CPU count, capped at 8 to avoid over-subscription.
         self.max_workers = max_workers if max_workers is not None else min(8, os.cpu_count() or 1)
+        self.output_format = output_format
+        self.png_dpi = png_dpi
         self.insight_engine = CodeInsightEngine(
             repo,
             enable_semantic_minimap=enable_semantic_minimap,
@@ -52,22 +57,31 @@ class PDFGenerator:
             linter_timeout=linter_timeout,
         )
 
-    def generate_all(self):
-        """Generate index PDF and one PDF per file into output_dir.
+    def _file_out_name(self, info: FileInfo, ext: str | None = None) -> str:
+        """生成输出文件名，ext 为 None 时使用 self.output_format。"""
+        if ext is None:
+            ext = self.output_format
+        safe_path = str(info.path).replace("/", "_").replace("\\", "_")
+        safe_path = re.sub(r"[^\w\-_.]", "_", safe_path)
+        return f"{info.index:03d}_{safe_path}.{ext}"
 
-        Files are processed in parallel (ThreadPoolExecutor) so that I/O and
-        ReportLab rendering overlap.  When `incremental=True` any file whose
-        source mtime is older than its existing PDF is skipped.
-        """
+    def _file_pdf_name(self, info: FileInfo) -> str:
+        """返回输出文件名（使用当前 output_format 后缀）。"""
+        return self._file_out_name(info)
+
+    def generate_all(self):
+        """Generate index + one output file per source file into output_dir."""
+        fmt_label = self.output_format.upper()
         log.info("")
         log.info("Project: %s", self.repo.name)
         log.info("Files: %d, Lines: %d", len(self.repo.files), self.repo.total_lines)
         log.info("Output: %s", self.output_dir)
+        log.info("Format: %s", fmt_label)
         if self.incremental:
             log.info("Mode: incremental (skipping up-to-date files)")
         log.info("")
         self.insight_engine.enrich_repo()
-        self._generate_index_pdf()
+        self._generate_index()
 
         pending = [
             info for info in self.repo.files
@@ -75,36 +89,36 @@ class PDFGenerator:
         ]
         skipped = len(self.repo.files) - len(pending)
         if skipped:
-            log.info("  Skipping %d up-to-date file PDFs", skipped)
+            log.info("  Skipping %d up-to-date file %ss", skipped, fmt_label)
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
-            futures = {pool.submit(self._generate_file_pdf, info): info for info in pending}
+            futures = {pool.submit(self._generate_file_output, info): info for info in pending}
             total = len(futures)
             for index, fut in enumerate(as_completed(futures), start=1):
                 exc = fut.exception()
                 if exc:
                     info = futures[fut]
-                    log.warning("  Failed to generate PDF for %s: %s", info.path, exc)
+                    log.warning("  Failed to generate %s for %s: %s", fmt_label, info.path, exc)
                 if index % 10 == 0 or index == total:
                     log.info("  Progress: %d/%d files", index, total)
 
         log.info("")
-        log.info("Done! Generated %d PDFs (+ index)", len(pending))
+        log.info("Done! Generated %d %ss (+ index)", len(pending), fmt_label)
 
     def generate_index_only(self) -> None:
-        """Generate only `00_INDEX.pdf` into output_dir."""
+        """Generate only the index file into output_dir."""
         self.insight_engine.enrich_repo()
-        self._generate_index_pdf()
+        self._generate_index()
 
-    def _needs_regeneration(self, info: "FileInfo") -> bool:
-        """Return True if the file PDF must be (re-)generated."""
+    def _needs_regeneration(self, info: FileInfo) -> bool:
+        """Return True if the output file must be (re-)generated."""
         if not self.incremental:
             return True
-        pdf_path = self.output_dir / self._file_pdf_name(info)
-        if not pdf_path.exists():
+        out_path = self.output_dir / self._file_out_name(info)
+        if not out_path.exists():
             return True
         try:
-            return info.abs_path.stat().st_mtime > pdf_path.stat().st_mtime
+            return info.abs_path.stat().st_mtime > out_path.stat().st_mtime
         except OSError:
             return True
 
@@ -118,12 +132,46 @@ class PDFGenerator:
                                f"Page {doc.page}")
         canvas.restoreState()
 
-    def _make_doc(self, filename: str):
+    def _make_doc(self, target):
+        """创建 SimpleDocTemplate。
+
+        Parameters
+        ----------
+        target : str | Path | io.BytesIO
+            输出目标——文件路径或内存缓冲区。
+        """
+        if isinstance(target, (str, Path)):
+            dest = str(target)
+        else:
+            dest = target
         return SimpleDocTemplate(
-            str(filename), pagesize=A4,
+            dest, pagesize=A4,
             leftMargin=self.margin, rightMargin=self.margin,
             topMargin=self.margin, bottomMargin=15 * mm,
         )
+
+    def _build_and_save(self, story: list, out_path: Path) -> None:
+        """构建 PDF 并根据 output_format 保存为 PDF 或 PNG。
+
+        当 output_format == 'pdf' 时直接写入磁盘。
+        当 output_format == 'png' 时先在内存中生成 PDF，再转为长图 PNG 写入磁盘。
+        """
+        if self.output_format == "pdf":
+            doc = self._make_doc(out_path)
+            doc.build(story,
+                      onFirstPage=self._page_footer,
+                      onLaterPages=self._page_footer)
+        else:
+            from .utils import pdf_bytes_to_long_png
+
+            buf = io.BytesIO()
+            doc = self._make_doc(buf)
+            doc.build(story,
+                      onFirstPage=self._page_footer,
+                      onLaterPages=self._page_footer)
+            pdf_bytes = buf.getvalue()
+            png_bytes = pdf_bytes_to_long_png(pdf_bytes, dpi=self.png_dpi)
+            out_path.write_bytes(png_bytes)
 
     def _cjk_style(self, name, parent_name="Normal", **kwargs):
         styles = getSampleStyleSheet()
@@ -137,9 +185,15 @@ class PDFGenerator:
         padding = 12
         return max(1, int((avail_h - padding) / line_h))
 
-    def _generate_index_pdf(self):
-        filename = self.output_dir / "00_INDEX.pdf"
-        doc = self._make_doc(filename)
+    def _generate_index(self):
+        """生成索引文件（PDF 或 PNG）。"""
+        ext = self.output_format
+        out_path = self.output_dir / f"00_INDEX.{ext}"
+        story = self._build_index_story()
+        self._build_and_save(story, out_path)
+        log.info("  00_INDEX.%s (%d files indexed)", ext, len(self.repo.files))
+
+    def _build_index_story(self) -> list:
         story = []
         cw = self.content_width
 
@@ -221,11 +275,11 @@ class PDFGenerator:
         # Use ASCII tree connectors to avoid missing glyphs in fallback fonts.
         tree_str = (
             self.repo.tree_str
-            .replace("├── ", "|-- ")
-            .replace("└── ", "`-- ")
-            .replace("│   ", "|   ")
-            .replace("─", "-")
-            .replace("│", "|")
+            .replace("\u251c\u2500\u2500 ", "|-- ")
+            .replace("\u2514\u2500\u2500 ", "'-- ")
+            .replace("\u2502   ", "|   ")
+            .replace("\u2500", "-")
+            .replace("\u2502", "|")
         )
         tree_lines = tree_str.split("\n")
         if len(tree_lines) > 120:
@@ -250,11 +304,11 @@ class PDFGenerator:
             Paragraph("<b>Lang</b>", fs),
             Paragraph("<b>Lines</b>", fs),
             Paragraph("<b>Size</b>", fs),
-            Paragraph("<b>PDF</b>", fs),
+            Paragraph("<b>Output</b>", fs),
         ]
         data = [header]
         for info in self.repo.files:
-            pdf_name = self._file_pdf_name(info)
+            out_name = self._file_out_name(info)
             data.append([
                 Paragraph(str(info.index), fs),
                 Paragraph(
@@ -265,7 +319,7 @@ class PDFGenerator:
                 Paragraph(self._fmt_size(info.size), fs),
                 Paragraph(
                     f'<font color="{COLORS["accent2"].hexval()}">'
-                    f"{xml_escape(pdf_name)}</font>", fs),
+                    f"{xml_escape(out_name)}</font>", fs),
             ])
         cols = [cw * 0.06, cw * 0.38, cw * 0.12,
                 cw * 0.12, cw * 0.12, cw * 0.20]
@@ -284,15 +338,19 @@ class PDFGenerator:
         ]))
         story.append(file_table)
 
-        doc.build(story,
-                  onFirstPage=self._page_footer,
-                  onLaterPages=self._page_footer)
-        log.info("  00_INDEX.pdf (%d files indexed)", len(self.repo.files))
+        return story
 
-    def _generate_file_pdf(self, file_info: FileInfo):
-        pdf_name = self._file_pdf_name(file_info)
-        filename = self.output_dir / pdf_name
-        doc = self._make_doc(filename)
+    def _generate_file_output(self, file_info: FileInfo):
+        """生成单个源文件的输出（PDF 或 PNG）。"""
+        out_name = self._file_out_name(file_info)
+        out_path = self.output_dir / out_name
+        story = self._build_file_story(file_info)
+        self._build_and_save(story, out_path)
+        file_info.release_content()
+        log.info("  %s (%d lines)", out_name, file_info.line_count)
+
+    def _build_file_story(self, file_info: FileInfo) -> list:
+        """组装单个源文件的 story 列表（纯数据，不涉及 IO）。"""
         story = []
         cw = self.content_width
 
@@ -378,11 +436,7 @@ class PDFGenerator:
                               later_avail=later_avail,
                               line_heat=line_heat)
 
-        doc.build(story,
-                  onFirstPage=self._page_footer,
-                  onLaterPages=self._page_footer)
-        file_info.release_content()
-        log.info("  %s (%d lines)", pdf_name, file_info.line_count)
+        return story
 
     def _add_code_chunks(self, story, all_lines, language, width,
                          first_avail, later_avail, font_size=6.5,
@@ -409,11 +463,6 @@ class PDFGenerator:
                     story.append(Spacer(1, 0))
                 else:
                     story.append(Spacer(1, 1))
-
-    def _file_pdf_name(self, info: FileInfo) -> str:
-        safe_path = str(info.path).replace("/", "_").replace("\\", "_")
-        safe_path = re.sub(r"[^\w\-_.]", "_", safe_path)
-        return f"{info.index:03d}_{safe_path}.pdf"
 
     @staticmethod
     def _line_heat_map(info: FileInfo) -> dict[int, str]:
