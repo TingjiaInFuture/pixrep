@@ -6,6 +6,7 @@ import ast
 import fnmatch
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -13,7 +14,9 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .constants import DEFAULT_IGNORE_PATTERNS
 from .file_utils import normalize_posix_path
+from .file_utils import compile_ignore_matcher, should_ignore_dir
 from .models import FileInfo, RepoInfo
 
 log = logging.getLogger(__name__)
@@ -113,6 +116,7 @@ class RipgrepSearcher:
             for type_name in type_filters:
                 cmd.extend(["--type", type_name])
 
+        cmd.append("--")
         cmd.append(pattern)
         cmd.append(str(self.repo_root))
 
@@ -194,12 +198,16 @@ class RipgrepSearcher:
             except re.error:
                 compiled = re.compile(re.escape(pattern), flags)
 
+        ignore_match = compile_ignore_matcher(DEFAULT_IGNORE_PATTERNS)
         matches: list[MatchLocation] = []
-        for dirpath, _, filenames in __import__("os").walk(self.repo_root):
+        for dirpath, dirnames, filenames in os.walk(self.repo_root):
+            dirnames[:] = sorted(d for d in dirnames if not should_ignore_dir(d))
             for fname in filenames:
                 fp = Path(dirpath) / fname
                 rel = normalize_posix_path(fp.relative_to(self.repo_root))
                 if file_globs and not _glob_accepts(rel, file_globs):
+                    continue
+                if ignore_match(rel):
                     continue
                 try:
                     text = fp.read_text(encoding="utf-8", errors="replace")

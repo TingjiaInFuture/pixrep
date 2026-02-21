@@ -132,7 +132,11 @@ class CodeInsightEngine:
             )
 
             for fut in done:
-                partial = fut.result() or {}
+                try:
+                    partial = fut.result() or {}
+                except Exception:
+                    log.debug("lint collector future failed", exc_info=True)
+                    partial = {}
                 for rel, rel_issues in partial.items():
                     issues[rel].extend(rel_issues)
 
