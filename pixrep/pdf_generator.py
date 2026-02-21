@@ -50,6 +50,7 @@ class PDFGenerator:
         self.max_workers = max_workers if max_workers is not None else min(8, os.cpu_count() or 1)
         self.output_format = output_format
         self.png_dpi = png_dpi
+        self.streaming_file_threshold = 256 * 1024
         self.insight_engine = CodeInsightEngine(
             repo,
             enable_semantic_minimap=enable_semantic_minimap,
@@ -411,7 +412,6 @@ class PDFGenerator:
             story.append(Spacer(1, 2 * mm))
             legend_budget = legend_h + 4 * mm
 
-        all_lines = file_info.load_content().split("\n")
         base_meta_lines = 4
         semantic_meta_lines = 1 if (self.enable_semantic_minimap and file_info.semantic_map.kind != "none") else 0
         lint_meta_lines = 1 if self.enable_lint_heatmap else 0
@@ -431,10 +431,22 @@ class PDFGenerator:
         later_avail = self.avail_height - 10
 
         line_heat = self._line_heat_map(file_info) if self.enable_lint_heatmap else {}
-        self._add_code_chunks(story, all_lines, file_info.language, cw,
-                              first_avail=first_avail,
-                              later_avail=later_avail,
-                              line_heat=line_heat)
+        if file_info.size >= self.streaming_file_threshold:
+            self._add_code_chunks_streaming(
+                story,
+                file_info.abs_path,
+                file_info.language,
+                cw,
+                first_avail=first_avail,
+                later_avail=later_avail,
+                line_heat=line_heat,
+            )
+        else:
+            all_lines = file_info.load_content().split("\n")
+            self._add_code_chunks(story, all_lines, file_info.language, cw,
+                                  first_avail=first_avail,
+                                  later_avail=later_avail,
+                                  line_heat=line_heat)
 
         return story
 
@@ -463,6 +475,52 @@ class PDFGenerator:
                     story.append(Spacer(1, 0))
                 else:
                     story.append(Spacer(1, 1))
+
+    def _add_code_chunks_streaming(self, story, abs_path: Path, language, width,
+                                   first_avail, later_avail, font_size=6.5,
+                                   line_heat: dict[int, str] | None = None):
+        first_chunk = True
+        line_no = 1
+
+        try:
+            with abs_path.open("r", encoding="utf-8", errors="replace") as f:
+                while True:
+                    avail = first_avail if first_chunk else later_avail
+                    n = self._max_lines_for_height(avail, font_size)
+                    chunk: list[str] = []
+                    for _ in range(n):
+                        line = f.readline()
+                        if line == "":
+                            break
+                        chunk.append(line.rstrip("\n"))
+
+                    if not chunk:
+                        break
+
+                    story.append(CodeBlockChunk(
+                        chunk, language,
+                        fonts=self.fonts,
+                        start_line=line_no,
+                        width=width, font_size=font_size,
+                        line_heat=line_heat,
+                    ))
+
+                    line_no += len(chunk)
+                    first_chunk = False
+
+                    if len(chunk) == n:
+                        if line_heat and (line_heat.get(line_no - 1) or line_heat.get(line_no)):
+                            story.append(Spacer(1, 0))
+                        else:
+                            story.append(Spacer(1, 1))
+        except OSError:
+            story.append(CodeBlockChunk(
+                ["(read failed)"], language,
+                fonts=self.fonts,
+                start_line=1,
+                width=width, font_size=font_size,
+                line_heat=line_heat,
+            ))
 
     @staticmethod
     def _line_heat_map(info: FileInfo) -> dict[int, str]:

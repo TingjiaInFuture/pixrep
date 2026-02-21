@@ -28,6 +28,7 @@ class FileInfo:
     abs_path: Path
     language: str
     size: int
+    mtime_ns: int = -1
     line_count: int = 0
     content: str = field(default="", repr=False)
     index: int = 0

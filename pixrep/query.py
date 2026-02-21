@@ -42,6 +42,16 @@ class CodeSnippet:
     abs_path: Path | None = None
 
 
+@dataclass(frozen=True)
+class SymbolEntry:
+    rel_path: str
+    line_number: int
+    line_text: str
+    name: str
+    qualified: str
+    kind: str
+
+
 class RipgrepSearcher:
     """Wrapper around ripgrep for structured code search."""
 
@@ -218,6 +228,9 @@ class SemanticSearcher:
     def __init__(self, repo: RepoInfo, max_results: int = 300):
         self.repo = repo
         self.max_results = max_results
+        self._cache_root = self.repo.root / ".pixrep_cache"
+        self._cache_root.mkdir(parents=True, exist_ok=True)
+        self._index_path = self._cache_root / "symbol_index.json"
 
     def search(
         self,
@@ -230,12 +243,52 @@ class SemanticSearcher:
         checker = self._build_checker(pattern, fixed_strings=fixed_strings, case_sensitive=case_sensitive)
         out: list[MatchLocation] = []
 
+        entries = self._load_or_build_symbol_index()
+        for entry in entries:
+            if file_globs and not _glob_accepts(entry.rel_path, file_globs):
+                continue
+            if checker(entry.name) or checker(entry.qualified):
+                out.append(
+                    MatchLocation(
+                        rel_path=entry.rel_path,
+                        line_number=entry.line_number,
+                        line_text=entry.line_text,
+                        submatches=[],
+                    )
+                )
+            if len(out) >= self.max_results:
+                return out
+
+        return out
+
+    def _load_or_build_symbol_index(self) -> list[SymbolEntry]:
+        signatures: dict[str, dict[str, int]] = {}
         for info in self.repo.files:
             if info.language != "python":
                 continue
             rel = normalize_posix_path(info.path)
-            if file_globs and not _glob_accepts(rel, file_globs):
+            try:
+                st = info.abs_path.stat()
+                signatures[rel] = {"mtime_ns": int(st.st_mtime_ns), "size": int(st.st_size)}
+            except OSError:
+                signatures[rel] = {"mtime_ns": -1, "size": -1}
+
+        cached = self._read_symbol_cache()
+        if cached is not None:
+            cached_sigs, cached_entries = cached
+            if cached_sigs == signatures:
+                return cached_entries
+
+        fresh = self._build_symbol_index()
+        self._write_symbol_cache(signatures, fresh)
+        return fresh
+
+    def _build_symbol_index(self) -> list[SymbolEntry]:
+        entries: list[SymbolEntry] = []
+        for info in self.repo.files:
+            if info.language != "python":
                 continue
+            rel = normalize_posix_path(info.path)
 
             try:
                 content = info.load_content().lstrip("\ufeff")
@@ -252,32 +305,91 @@ class SemanticSearcher:
 
             for node in ast.walk(tree):
                 if isinstance(node, ast.ClassDef):
-                    if checker(node.name):
-                        out.append(
-                            MatchLocation(
-                                rel_path=rel,
-                                line_number=max(1, int(getattr(node, "lineno", 1))),
-                                line_text=_line_at(lines, getattr(node, "lineno", 1)),
-                                submatches=[],
-                            )
+                    line_no = max(1, int(getattr(node, "lineno", 1)))
+                    entries.append(
+                        SymbolEntry(
+                            rel_path=rel,
+                            line_number=line_no,
+                            line_text=_line_at(lines, line_no),
+                            name=node.name,
+                            qualified=node.name,
+                            kind="class",
                         )
+                    )
                 elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     owner = class_by_node.get(id(node), "")
                     qualified = f"{owner}.{node.name}" if owner else node.name
-                    if checker(node.name) or checker(qualified):
-                        out.append(
-                            MatchLocation(
-                                rel_path=rel,
-                                line_number=max(1, int(getattr(node, "lineno", 1))),
-                                line_text=_line_at(lines, getattr(node, "lineno", 1)),
-                                submatches=[],
-                            )
+                    line_no = max(1, int(getattr(node, "lineno", 1)))
+                    entries.append(
+                        SymbolEntry(
+                            rel_path=rel,
+                            line_number=line_no,
+                            line_text=_line_at(lines, line_no),
+                            name=node.name,
+                            qualified=qualified,
+                            kind="function",
                         )
+                    )
+        entries.sort(key=lambda e: (e.rel_path, e.line_number, e.kind, e.qualified))
+        return entries
 
-                if len(out) >= self.max_results:
-                    return out
+    def _read_symbol_cache(self) -> tuple[dict[str, dict[str, int]], list[SymbolEntry]] | None:
+        if not self._index_path.exists():
+            return None
+        try:
+            payload = json.loads(self._index_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
 
-        return out
+        sigs_raw = payload.get("files", {})
+        entries_raw = payload.get("entries", [])
+        if not isinstance(sigs_raw, dict) or not isinstance(entries_raw, list):
+            return None
+
+        signatures: dict[str, dict[str, int]] = {}
+        for rel, sig in sigs_raw.items():
+            if not isinstance(sig, dict):
+                continue
+            signatures[str(rel)] = {
+                "mtime_ns": int(sig.get("mtime_ns", -1)),
+                "size": int(sig.get("size", -1)),
+            }
+
+        entries: list[SymbolEntry] = []
+        for item in entries_raw:
+            if not isinstance(item, dict):
+                continue
+            entries.append(
+                SymbolEntry(
+                    rel_path=str(item.get("rel_path", "")),
+                    line_number=max(1, int(item.get("line_number", 1))),
+                    line_text=str(item.get("line_text", "")),
+                    name=str(item.get("name", "")),
+                    qualified=str(item.get("qualified", "")),
+                    kind=str(item.get("kind", "symbol")),
+                )
+            )
+        return signatures, entries
+
+    def _write_symbol_cache(self, signatures: dict[str, dict[str, int]], entries: list[SymbolEntry]) -> None:
+        payload = {
+            "files": signatures,
+            "entries": [
+                {
+                    "rel_path": e.rel_path,
+                    "line_number": e.line_number,
+                    "line_text": e.line_text,
+                    "name": e.name,
+                    "qualified": e.qualified,
+                    "kind": e.kind,
+                }
+                for e in entries
+            ],
+        }
+        try:
+            self._index_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            return
 
     @staticmethod
     def _build_checker(pattern: str, *, fixed_strings: bool, case_sensitive: bool):
@@ -334,6 +446,11 @@ class ContextExtractor:
                 continue
 
             all_lines = content.split("\n")
+            stripped_lines = [line.lstrip() for line in all_lines]
+            indents = [
+                (len(line) - len(stripped)) if stripped else -1
+                for line, stripped in zip(all_lines, stripped_lines)
+            ]
             total = len(all_lines)
             file_matches.sort(key=lambda m: m.line_number)
 
@@ -341,7 +458,7 @@ class ContextExtractor:
             for m in file_matches:
                 start = max(1, m.line_number - self.context_lines)
                 end = min(total, m.line_number + self.context_lines)
-                start, end = self._expand_to_scope(all_lines, m.line_number, start, end)
+                start, end = self._expand_to_scope(all_lines, stripped_lines, indents, m.line_number, start, end)
                 ranges.append((start, end, [m.line_number]))
 
             for start, end, match_lines in self._merge_ranges(ranges):
@@ -365,6 +482,8 @@ class ContextExtractor:
     def _expand_to_scope(
         self,
         all_lines: list[str],
+        stripped_lines: list[str],
+        indents: list[int],
         match_line: int,
         current_start: int,
         current_end: int,
@@ -374,17 +493,15 @@ class ContextExtractor:
 
         scope_keywords = ("async def ", "def ", "class ", "function ", "fn ", "func ")
 
-        match_text = all_lines[match_line - 1]
-        match_indent = len(match_text) - len(match_text.lstrip())
+        match_indent = indents[match_line - 1] if indents[match_line - 1] >= 0 else 0
         found_header_line: int | None = None
         header_indent = match_indent
 
         for i in range(match_line - 1, max(0, match_line - 120) - 1, -1):
-            line = all_lines[i]
-            stripped = line.lstrip()
+            stripped = stripped_lines[i]
             if not stripped:
                 continue
-            indent = len(line) - len(stripped)
+            indent = indents[i] if indents[i] >= 0 else 0
             if any(stripped.startswith(kw) for kw in scope_keywords):
                 if indent <= match_indent or i == match_line - 1:
                     found_header_line = i + 1
@@ -398,11 +515,10 @@ class ContextExtractor:
         downward_end = current_end
 
         for j in range(found_header_line, min(len(all_lines), found_header_line + self.max_snippet_lines)):
-            line = all_lines[j]
-            stripped = line.lstrip()
+            stripped = stripped_lines[j]
             if not stripped:
                 continue
-            indent = len(line) - len(stripped)
+            indent = indents[j] if indents[j] >= 0 else 0
             if j + 1 > match_line and indent <= header_indent and any(
                 stripped.startswith(kw) for kw in scope_keywords
             ):

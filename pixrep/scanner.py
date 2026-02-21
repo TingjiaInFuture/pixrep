@@ -1,6 +1,8 @@
 import os
 import logging
 import subprocess
+import concurrent.futures
+import mmap
 from pathlib import Path
 
 from .constants import DEFAULT_IGNORE_PATTERNS
@@ -21,11 +23,13 @@ log = logging.getLogger(__name__)
 class RepoScanner:
     def __init__(self, root: str, max_file_size: int = 512 * 1024,
                  extra_ignore: list[str] | None = None,
-                 prefer_git_source: bool = True):
+                 prefer_git_source: bool = True,
+                 scan_workers: int | None = None):
         self.root = Path(root).resolve()
         self.max_file_size = max_file_size
         self.extra_ignore = extra_ignore or []
         self.prefer_git_source = prefer_git_source
+        self.scan_workers = scan_workers or 8
         self._ignore_patterns = [*DEFAULT_IGNORE_PATTERNS, *self.extra_ignore]
         self._ignore_match = compile_ignore_matcher(self._ignore_patterns)
 
@@ -70,6 +74,20 @@ class RepoScanner:
             return total
         except (IOError, OSError) as e:
             log.debug("failed to stream-count lines: %s (%s)", filepath, e)
+            return None
+
+    def _count_lines_mmap(self, filepath: Path) -> int | None:
+        try:
+            with filepath.open("rb") as f:
+                with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                    if len(mm) == 0:
+                        return 0
+                    total = mm[:].count(b"\n")
+                    if not mm[-1:] == b"\n":
+                        total += 1
+                    return total
+        except (IOError, OSError, ValueError) as e:
+            log.debug("failed to mmap-count lines: %s (%s)", filepath, e)
             return None
 
     def _git_ls_files(self) -> list[Path] | None:
@@ -117,6 +135,59 @@ class RepoScanner:
             for filename in sorted(filenames):
                 yield Path(dirpath) / filename
 
+    def _scan_one_file(self, filepath: Path, include_content: bool) -> tuple[str, FileInfo | None]:
+        try:
+            rel_path = filepath.relative_to(self.root)
+        except ValueError:
+            return ("skipped_unreadable", None)
+
+        rel_posix = normalize_posix_path(rel_path)
+        if self._should_ignore_file(rel_posix, filepath.name):
+            return ("ignored_by_pattern", None)
+
+        try:
+            st = filepath.stat()
+            size = st.st_size
+            mtime_ns = int(st.st_mtime_ns)
+        except OSError:
+            return ("skipped_unreadable", None)
+
+        if size > self.max_file_size or size == 0:
+            return ("skipped_size_or_empty", None)
+
+        if include_content:
+            blob = self._read_bytes(filepath)
+            if blob is None:
+                return ("skipped_unreadable", None)
+            if not is_probably_text(blob[:8192]):
+                return ("skipped_binary", None)
+            line_count = line_count_from_bytes(blob)
+            content = blob.decode(encoding="utf-8", errors="replace")
+        else:
+            sample = self._read_sample(filepath)
+            if sample is None:
+                return ("skipped_unreadable", None)
+            if not is_probably_text(sample):
+                return ("skipped_binary", None)
+
+            content = ""
+            line_count = self._count_lines_mmap(filepath)
+            if line_count is None:
+                line_count = self._count_lines_stream(filepath)
+            if line_count is None:
+                return ("skipped_unreadable", None)
+
+        info = FileInfo(
+            path=rel_path,
+            abs_path=filepath,
+            language=self._detect_language(filepath),
+            size=size,
+            mtime_ns=mtime_ns,
+            line_count=line_count,
+            content=content,
+        )
+        return ("ok", info)
+
     def scan(self, include_content: bool = True) -> RepoInfo:
         """Scan repository files and return a populated RepoInfo."""
         repo = RepoInfo(root=self.root, name=self.root.name)
@@ -129,54 +200,16 @@ class RepoScanner:
             "skipped_binary": 0,
         }
 
-        for filepath in self._iter_files():
-            scan_stats["seen_files"] += 1
-            try:
-                rel_path = filepath.relative_to(self.root)
-            except ValueError:
-                scan_stats["skipped_unreadable"] += 1
-                continue
-            rel_posix = normalize_posix_path(rel_path)
-            if self._should_ignore_file(rel_posix, filepath.name):
-                scan_stats["ignored_by_pattern"] += 1
-                continue
-            try:
-                size = filepath.stat().st_size
-            except OSError:
-                scan_stats["skipped_unreadable"] += 1
-                continue
-            if size > self.max_file_size or size == 0:
-                scan_stats["skipped_size_or_empty"] += 1
-                continue
+        candidates = list(self._iter_files())
+        scan_stats["seen_files"] = len(candidates)
 
-            blob: bytes | None = None
-            sample = self._read_sample(filepath)
-            if sample is None:
-                scan_stats["skipped_unreadable"] += 1
-                continue
-            if not is_probably_text(sample):
-                scan_stats["skipped_binary"] += 1
-                continue
-
-            if include_content:
-                blob = self._read_bytes(filepath)
-                if blob is None:
-                    scan_stats["skipped_unreadable"] += 1
-                    continue
-                line_count = line_count_from_bytes(blob)
-                content = blob.decode(encoding="utf-8", errors="replace")
-            else:
-                content = ""
-                line_count = self._count_lines_stream(filepath)
-                if line_count is None:
-                    scan_stats["skipped_unreadable"] += 1
-                    continue
-
-            files.append(FileInfo(
-                path=rel_path, abs_path=filepath,
-                language=self._detect_language(filepath),
-                size=size, line_count=line_count, content=content,
-            ))
+        max_workers = max(1, min(self.scan_workers, len(candidates) or 1))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            for status, info in pool.map(lambda p: self._scan_one_file(p, include_content), candidates):
+                if status == "ok" and info is not None:
+                    files.append(info)
+                elif status in scan_stats:
+                    scan_stats[status] += 1
 
         files.sort(key=lambda item: str(item.path))
         for index, info in enumerate(files, 1):

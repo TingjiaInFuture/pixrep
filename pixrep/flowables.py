@@ -51,7 +51,8 @@ class CodeBlockChunk(Flowable):
                  fonts: FontRegistry,
                  start_line: int = 1, width: float | None = None,
                  font_size: float = 6.5,
-                 line_heat: dict[int, str] | None = None):
+                 line_heat: dict[int, str] | None = None,
+                 _precomputed_mask: list[bool] | None = None):
         super().__init__()
         self.code_lines = lines
         self.language = language
@@ -66,7 +67,7 @@ class CodeBlockChunk(Flowable):
         self.kw_set = KEYWORDS.get(language, set())
         self.builtin_set = BUILTIN_FUNCTIONS.get(language, set())
         self.line_comment = COMMENT_STYLES.get(language)
-        self._ml_string_mask = self._compute_multiline_string_mask()
+        self._ml_string_mask = _precomputed_mask if _precomputed_mask is not None else self._compute_multiline_string_mask()
 
     def _compute_multiline_string_mask(self) -> list[bool]:
         """
@@ -134,6 +135,7 @@ class CodeBlockChunk(Flowable):
             width=self.block_width,
             font_size=self.font_size,
             line_heat=self.line_heat,
+            _precomputed_mask=self._ml_string_mask[:max_lines],
         )
         second_chunk = CodeBlockChunk(
             self.code_lines[max_lines:],
@@ -143,6 +145,7 @@ class CodeBlockChunk(Flowable):
             width=self.block_width,
             font_size=self.font_size,
             line_heat=self.line_heat,
+            _precomputed_mask=self._ml_string_mask[max_lines:],
         )
         return [first_chunk, second_chunk]
 
@@ -232,6 +235,16 @@ class CodeBlockChunk(Flowable):
 
         segments = self._split_line_segments(line)
         cur_x = x
+        batches: list[tuple[str, str, Color, float]] = []
+
+        def add_batch(text: str, font: str, color: Color, draw_x: float):
+            if not text:
+                return
+            if batches and batches[-1][1] == font and batches[-1][2] == color:
+                prev_text, prev_font, prev_color, prev_x = batches[-1]
+                batches[-1] = (prev_text + text, prev_font, prev_color, prev_x)
+                return
+            batches.append((text, font, color, draw_x))
 
         for seg_text, seg_kind in segments:
             if not seg_text:
@@ -241,20 +254,15 @@ class CodeBlockChunk(Flowable):
                 continue
 
             if seg_kind == "comment":
-                canv.setFont(self.fonts.mono, fs)
-                canv.setFillColor(COLORS["comment"])
-                canv.drawString(cur_x, y, seg_text)
+                add_batch(seg_text, self.fonts.mono, COLORS["comment"], cur_x)
                 cur_x += str_width(seg_text, fs)
                 continue
 
             if seg_kind == "string":
-                canv.setFont(self.fonts.mono, fs)
-                canv.setFillColor(COLORS["string"])
-                canv.drawString(cur_x, y, seg_text)
+                add_batch(seg_text, self.fonts.mono, COLORS["string"], cur_x)
                 cur_x += str_width(seg_text, fs)
                 continue
 
-            # code segment: keep whitespace as-is, but colorize tokens.
             tokens = _SPLIT_WS.split(seg_text)
             for token in tokens:
                 if not token:
@@ -264,13 +272,13 @@ class CodeBlockChunk(Flowable):
                     continue
 
                 color = COLORS["fg"]
-                bold = False
+                font = self.fonts.mono
 
                 word = _strip_nonword(token)
 
                 if word in self.kw_set:
                     color = COLORS["keyword"]
-                    bold = True
+                    font = self.fonts.mono_bold
                 elif word in self.builtin_set:
                     color = COLORS["type"]
                 elif self.language == "python" and word in ("self", "cls"):
@@ -278,11 +286,19 @@ class CodeBlockChunk(Flowable):
                 elif _is_simple_number(word):
                     color = COLORS["number"]
 
-                canv.setFillColor(color)
-                font = self.fonts.mono_bold if bold else self.fonts.mono
-                canv.setFont(font, fs)
-                canv.drawString(cur_x, y, token)
+                add_batch(token, font, color, cur_x)
                 cur_x += str_width(token, fs)
+
+        last_font = None
+        last_color = None
+        for text, font, color, draw_x in batches:
+            if font != last_font:
+                canv.setFont(font, fs)
+                last_font = font
+            if color != last_color:
+                canv.setFillColor(color)
+                last_color = color
+            canv.drawString(draw_x, y, text)
 
     def _split_line_segments(self, line: str) -> list[tuple[str, str]]:
         """

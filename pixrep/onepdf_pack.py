@@ -12,7 +12,7 @@ from .file_utils import (
     compile_ignore_matcher,
     normalize_posix_path,
 )
-from .onepdf_writer import MinimalPDFWriter, pdf_escape_literal
+from .onepdf_writer import StreamingPDFWriter, pdf_escape_literal
 from .scanner import RepoScanner
 
 # Pre-built translate table shared by all _ascii_safe calls.
@@ -157,6 +157,8 @@ def collect_core_files(
 
 
 def _ascii_safe(s: str) -> str:
+    if s.isascii():
+        return s.translate(_ASCII_SAFE_TABLE)
     translated = s.translate(_ASCII_SAFE_TABLE)
     return _NON_ASCII_RE.sub(lambda m: f"\\u{ord(m.group()):04x}", translated)
 
@@ -201,8 +203,8 @@ def pack_repo_to_one_pdf(
     page_height = 842
     max_lines = max(1, int((page_height - top - bottom) / leading))
 
-    page_streams: list[bytes] = []
     current: list[str] = []
+    writer = StreamingPDFWriter(title=f"{repo_root.name} onepdf", out_path=out_pdf)
 
     def flush_page() -> None:
         if not current:
@@ -219,7 +221,7 @@ def pack_repo_to_one_pdf(
             esc = pdf_escape_literal(line)
             parts.append(b"(" + esc.encode("ascii", errors="replace") + b") Tj\nT*\n")
         parts.append(b"ET\n")
-        page_streams.append(b"".join(parts))
+        writer.add_page(b"".join(parts))
         current.clear()
 
     def emit(line: str) -> None:
@@ -272,8 +274,7 @@ def pack_repo_to_one_pdf(
 
     flush_page()
 
-    writer = MinimalPDFWriter(title=f"{repo_root.name} onepdf")
-    writer.build(page_streams, out_pdf)
-    stats["pages"] = len(page_streams)
+    writer.finalize()
+    stats["pages"] = writer.page_count
     stats["output_bytes"] = int(out_pdf.stat().st_size) if out_pdf.exists() else 0
     return stats
