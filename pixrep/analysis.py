@@ -1,29 +1,20 @@
 import ast
-import bisect
 import concurrent.futures
 import hashlib
 import json
 import logging
 import os
-import re
 import shutil
 import subprocess
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 
 from .file_utils import normalize_posix_path
+from .js_parser import build_js_semantic_map
+from .lint_collector import iter_target_batches, ruff_severity
 from .models import FileInfo, LintIssue, RepoInfo, SemanticMap
-
-JS_CLASS_PAT = re.compile(
-    r"^\s*class\s+([A-Za-z_]\w*)(?:\s+extends\s+([A-Za-z_]\w*))?",
-    re.MULTILINE,
-)
-JS_FN_PATS = (
-    re.compile(r"^\s*function\s+([A-Za-z_]\w*)\s*\(", re.MULTILINE),
-    re.compile(r"^\s*const\s+([A-Za-z_]\w*)\s*=\s*\([^)]*\)\s*=>", re.MULTILINE),
-    re.compile(r"^\s*([A-Za-z_]\w*)\s*:\s*function\s*\(", re.MULTILINE),
-)
-JS_CALL_PAT = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+from .semantic_analyzer import build_python_semantic_map
 
 log = logging.getLogger(__name__)
 
@@ -49,11 +40,25 @@ class CodeInsightEngine:
             self._normalize_path(info.path): (int(info.mtime_ns), int(info.size))
             for info in self.repo.files
         }
-        self._cache_root = self._resolved_root / ".pixrep_cache"
+        self._cache_root = self._resolve_cache_root()
         self._semantic_cache_dir = self._cache_root / "semantic"
         self._lint_cache_dir = self._cache_root / "lint"
         self._semantic_cache_dir.mkdir(parents=True, exist_ok=True)
         self._lint_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _resolve_cache_root(self) -> Path:
+        env = os.environ.get("PIXREP_CACHE_DIR", "").strip()
+        if env:
+            return Path(env).expanduser().resolve() / self.repo.name
+
+        if os.name == "nt":
+            base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+            return base / "pixrep" / "cache" / self.repo.name
+
+        xdg = os.environ.get("XDG_CACHE_HOME", "").strip()
+        if xdg:
+            return Path(xdg).expanduser().resolve() / "pixrep" / self.repo.name
+        return Path.home() / ".cache" / "pixrep" / self.repo.name
 
     def enrich_repo(self):
         """Populate semantic maps and lint issues onto RepoInfo.file entries."""
@@ -180,28 +185,29 @@ class CodeInsightEngine:
         if cached is not None:
             return cached
 
-        cmd = ["ruff", "check", "--output-format", "json", *targets]
-        data = self._run_json_command(cmd, cwd=self.repo.root, tool="ruff")
-        if not data:
-            return {}
-        for item in data:
-            filename = item.get("filename")
-            location = item.get("location", {})
-            row = int(location.get("row", 1))
-            code = str(item.get("code", "RUFF"))
-            message = str(item.get("message", "ruff finding"))
-            rel = self._relative_to_repo(filename)
-            if not rel:
+        for batch in iter_target_batches(targets):
+            cmd = ["ruff", "check", "--output-format", "json", *batch]
+            data = self._run_json_command(cmd, cwd=self.repo.root, tool="ruff")
+            if not data:
                 continue
-            issues[rel].append(
-                LintIssue(
-                    line=max(1, row),
-                    severity=self._ruff_severity(code),
-                    tool="ruff",
-                    code=code,
-                    message=message,
+            for item in data:
+                filename = item.get("filename")
+                location = item.get("location", {})
+                row = int(location.get("row", 1))
+                code = str(item.get("code", "RUFF"))
+                message = str(item.get("message", "ruff finding"))
+                rel = self._relative_to_repo(filename)
+                if not rel:
+                    continue
+                issues[rel].append(
+                    LintIssue(
+                        line=max(1, row),
+                        severity=ruff_severity(code),
+                        tool="ruff",
+                        code=code,
+                        message=message,
+                    )
                 )
-            )
         result = dict(issues)
         self._save_lint_cache("ruff", cache_key, result)
         return result
@@ -223,33 +229,34 @@ class CodeInsightEngine:
         if cached is not None:
             return cached
 
-        cmd = [
-            "eslint",
-            "--format",
-            "json",
-            *targets,
-        ]
-        files = self._run_json_command(cmd, cwd=self.repo.root, tool="eslint")
-        if not files:
-            return {}
-        for entry in files:
-            rel = self._relative_to_repo(entry.get("filePath", ""))
-            if not rel:
+        for batch in iter_target_batches(targets):
+            cmd = [
+                "eslint",
+                "--format",
+                "json",
+                *batch,
+            ]
+            files = self._run_json_command(cmd, cwd=self.repo.root, tool="eslint")
+            if not files:
                 continue
-            for msg in entry.get("messages", []):
-                line = int(msg.get("line", 1))
-                sev = int(msg.get("severity", 1))
-                code = str(msg.get("ruleId") or "ESLINT")
-                text = str(msg.get("message", "eslint finding"))
-                issues[rel].append(
-                    LintIssue(
-                        line=max(1, line),
-                        severity="high" if sev >= 2 else "medium",
-                        tool="eslint",
-                        code=code,
-                        message=text,
+            for entry in files:
+                rel = self._relative_to_repo(entry.get("filePath", ""))
+                if not rel:
+                    continue
+                for msg in entry.get("messages", []):
+                    line = int(msg.get("line", 1))
+                    sev = int(msg.get("severity", 1))
+                    code = str(msg.get("ruleId") or "ESLINT")
+                    text = str(msg.get("message", "eslint finding"))
+                    issues[rel].append(
+                        LintIssue(
+                            line=max(1, line),
+                            severity="high" if sev >= 2 else "medium",
+                            tool="eslint",
+                            code=code,
+                            message=text,
+                        )
                     )
-                )
         result = dict(issues)
         self._save_lint_cache("eslint", cache_key, result)
         return result
@@ -298,91 +305,14 @@ class CodeInsightEngine:
         return semantic_map
 
     def _python_semantic_map(self, content: str) -> SemanticMap:
-        content = content.lstrip("\ufeff")
-        try:
-            tree = ast.parse(content)
-        except SyntaxError:
-            return SemanticMap(kind="callgraph", lines=["(parse failed)"], node_count=0, edge_count=0)
-
-        collector = _PyCombinedVisitor(self._ast_name)
-        collector.visit(tree)
-
-        classes: dict[str, list[str]] = collector.classes
-        inherits = collector.inherits
-        defined = set(collector.module_funcs) | set(collector.qualified_methods)
-        edges = {(src, dst) for src, dst in collector.edges if dst in defined}
-
-        lines: list[str] = []
-        if classes:
-            lines.append("UML:")
-            for class_name, class_methods in list(classes.items())[:6]:
-                lines.append(f"[Class] {class_name}")
-                for method in class_methods[:4]:
-                    lines.append(f"  - {method}()")
-            for child, parent in inherits[:6]:
-                lines.append(f"{child} <|-- {parent}")
-        if edges:
-            lines.append("Call Graph:")
-            for src, dst in list(sorted(edges))[:10]:
-                lines.append(f"{src} -> {dst}")
-        if not lines:
-            lines = ["(no classes/functions detected)"]
-
-        lines, truncated = self._limit_semantic_lines(lines)
-        return SemanticMap(
-            kind="uml+callgraph" if classes else "callgraph",
-            lines=lines,
-            node_count=len(defined),
-            edge_count=len(edges),
-            truncated=truncated,
+        return build_python_semantic_map(
+            content,
+            ast_name_resolver=self._ast_name,
+            max_semantic_lines=MAX_SEMANTIC_LINES,
         )
 
     def _js_semantic_map(self, content: str) -> SemanticMap:
-        classes = JS_CLASS_PAT.findall(content)
-        func_spans = self._js_function_spans(content)
-        funcs = {name for name, _, _ in func_spans}
-
-        call_edges: set[tuple[str, str]] = set()
-        max_edges = 64
-        js_keywords = {"if", "for", "while", "switch", "catch", "function", "return", "new"}
-        for src, start, end in func_spans:
-            body = content[start:end]
-            for callee in JS_CALL_PAT.findall(body)[:400]:
-                if callee in js_keywords:
-                    continue
-                if callee in funcs and callee != src:
-                    call_edges.add((src, callee))
-                    if len(call_edges) >= max_edges:
-                        break
-            if len(call_edges) >= max_edges:
-                break
-
-        lines: list[str] = []
-        if classes:
-            lines.append("UML:")
-            for class_name, parent in classes[:6]:
-                lines.append(f"[Class] {class_name}")
-                if parent:
-                    lines.append(f"{class_name} <|-- {parent}")
-        if funcs:
-            lines.append("Functions:")
-            for func_name in sorted(funcs)[:8]:
-                lines.append(f"  - {func_name}()")
-        if call_edges:
-            lines.append("Call Graph:")
-            for src, dst in sorted(call_edges)[:10]:
-                lines.append(f"{src} -> {dst}")
-        if not lines:
-            lines = ["(no symbols detected)"]
-
-        lines, truncated = self._limit_semantic_lines(lines)
-        return SemanticMap(
-            kind="uml+callgraph" if classes else "callgraph",
-            lines=lines,
-            node_count=len(funcs) + len(classes),
-            edge_count=len(call_edges),
-            truncated=truncated,
-        )
+        return build_js_semantic_map(content, max_semantic_lines=MAX_SEMANTIC_LINES)
 
     def _generic_semantic_map(self, content: str, language: str) -> SemanticMap:
         if language in {"text", "json", "yaml", "toml", "markdown", "ini"}:
@@ -397,14 +327,6 @@ class CodeInsightEngine:
             edge_count=0,
             truncated=truncated,
         )
-
-    @staticmethod
-    def _ruff_severity(code: str) -> str:
-        if code.startswith(("F", "E", "B", "SIM", "PLR")):
-            return "high"
-        if code.startswith(("W", "RUF", "C90")):
-            return "medium"
-        return "medium"
 
     def _relative_to_repo(self, path_value: str) -> str | None:
         if not path_value:
@@ -498,9 +420,27 @@ class CodeInsightEngine:
             ]
             for rel, rel_issues in issues.items()
         }
+        tmp_path: Path | None = None
         try:
-            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                delete=False,
+                dir=str(self._lint_cache_dir),
+                prefix=f".{tool}_{key}.",
+                suffix=".tmp",
+            ) as tmp:
+                tmp.write(json.dumps(payload, ensure_ascii=False))
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                tmp_path = Path(tmp.name)
+            os.replace(tmp_path, path)
         except OSError:
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             return
 
     @staticmethod
@@ -517,286 +457,3 @@ class CodeInsightEngine:
             return node.attr
         return ""
 
-    @staticmethod
-    def _js_function_spans(content: str) -> list[tuple[str, int, int]]:
-        """
-        Extract function spans for JS/TS using brace-balance to find exact
-        function body end positions.
-
-        This replaces the previous heuristic of treating the next function
-        definition's start as the current function's end — which was wrong for
-        nested functions, arrow functions, and closures.
-        """
-        hits: list[tuple[str, int]] = []
-        for pat in JS_FN_PATS:
-            for m in pat.finditer(content):
-                hits.append((m.group(1), m.start()))
-
-        if not hits:
-            return []
-
-        ordered = sorted(hits, key=lambda t: t[1])
-        content_len = len(content)
-        spans: list[tuple[str, int, int]] = []
-        non_code_spans = CodeInsightEngine._preprocess_non_code_spans(content)
-        span_starts = [s for s, _ in non_code_spans]
-
-        for name, start in ordered:
-            # Find the opening brace of the function body.
-            brace_start = CodeInsightEngine._find_next_code_brace(content, start, non_code_spans, span_starts)
-            if brace_start == -1:
-                continue
-
-            end = CodeInsightEngine._balanced_brace_end_fast(content, brace_start, non_code_spans, span_starts)
-            end = min(end, content_len)
-
-            spans.append((name, start, end))
-
-        return spans
-
-    @staticmethod
-    def _preprocess_non_code_spans(content: str) -> list[tuple[int, int]]:
-        spans: list[tuple[int, int]] = []
-        i = 0
-        length = len(content)
-        while i < length:
-            ch = content[i]
-            nxt = content[i + 1] if i + 1 < length else ""
-
-            if ch == "/" and nxt == "/":
-                end = content.find("\n", i + 2)
-                if end == -1:
-                    spans.append((i, length))
-                    break
-                spans.append((i, end))
-                i = end
-                continue
-
-            if ch == "/" and nxt == "*":
-                end = content.find("*/", i + 2)
-                if end == -1:
-                    spans.append((i, length))
-                    break
-                spans.append((i, end + 2))
-                i = end + 2
-                continue
-
-            if ch in {'"', "'", "`"}:
-                start = i
-                quote = ch
-                i += 1
-                escaped = False
-                while i < length:
-                    cur = content[i]
-                    if escaped:
-                        escaped = False
-                        i += 1
-                        continue
-                    if cur == "\\":
-                        escaped = True
-                        i += 1
-                        continue
-                    if cur == quote:
-                        i += 1
-                        break
-                    i += 1
-                spans.append((start, i))
-                continue
-
-            i += 1
-
-        return spans
-
-    @staticmethod
-    def _span_at(index: int, spans: list[tuple[int, int]], span_starts: list[int]) -> tuple[int, int] | None:
-        pos = bisect.bisect_right(span_starts, index) - 1
-        if pos < 0:
-            return None
-        start, end = spans[pos]
-        if start <= index < end:
-            return (start, end)
-        return None
-
-    @staticmethod
-    def _find_next_code_brace(
-        content: str,
-        start: int,
-        spans: list[tuple[int, int]],
-        span_starts: list[int],
-    ) -> int:
-        i = max(0, start)
-        length = len(content)
-        while i < length:
-            span = CodeInsightEngine._span_at(i, spans, span_starts)
-            if span is not None:
-                i = span[1]
-                continue
-            if content[i] == "{":
-                return i
-            i += 1
-        return -1
-
-    @staticmethod
-    def _balanced_brace_end_fast(
-        content: str,
-        brace_start: int,
-        spans: list[tuple[int, int]],
-        span_starts: list[int],
-    ) -> int:
-        depth = 0
-        i = brace_start
-        length = len(content)
-        while i < length:
-            span = CodeInsightEngine._span_at(i, spans, span_starts)
-            if span is not None:
-                i = span[1]
-                continue
-
-            ch = content[i]
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    return i + 1
-            i += 1
-        return length
-
-    @staticmethod
-    def _balanced_brace_end(content: str, brace_start: int) -> int:
-        depth = 0
-        i = brace_start
-        in_string: str | None = None
-        template_expr_depth = 0
-        escaped = False
-        length = len(content)
-
-        while i < length:
-            ch = content[i]
-            nxt = content[i + 1] if i + 1 < length else ""
-
-            if in_string:
-                if escaped:
-                    escaped = False
-                    i += 1
-                    continue
-                if ch == "\\":
-                    escaped = True
-                    i += 1
-                    continue
-                if in_string == "`" and ch == "$" and nxt == "{" and template_expr_depth >= 0:
-                    template_expr_depth += 1
-                    i += 2
-                    continue
-                if in_string == "`" and ch == "}" and template_expr_depth > 0:
-                    template_expr_depth -= 1
-                    i += 1
-                    continue
-                if in_string == "`" and template_expr_depth > 0:
-                    i += 1
-                    continue
-                if ch == in_string:
-                    in_string = None
-                i += 1
-                continue
-
-            if ch == "/" and nxt == "/":
-                nl = content.find("\n", i + 2)
-                if nl == -1:
-                    return length
-                i = nl + 1
-                continue
-            if ch == "/" and nxt == "*":
-                end = content.find("*/", i + 2)
-                if end == -1:
-                    return length
-                i = end + 2
-                continue
-
-            if ch in {'"', "'", "`"}:
-                in_string = ch
-                escaped = False
-                template_expr_depth = 0
-                i += 1
-                continue
-
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    return i + 1
-            i += 1
-        return length
-
-
-class _PyCombinedVisitor(ast.NodeVisitor):
-    def __init__(self, ast_name_resolver):
-        self._ast_name = ast_name_resolver
-        self.class_stack: list[str] = []
-        self.function_depth = 0
-        self.classes: dict[str, list[str]] = {}
-        self.class_methods: dict[str, set[str]] = defaultdict(set)
-        self.module_funcs: set[str] = set()
-        self.qualified_methods: set[str] = set()
-        self.inherits: list[tuple[str, str]] = []
-        self.scope: list[str] = ["(module)"]
-        self.edges: set[tuple[str, str]] = set()
-
-    def visit_ClassDef(self, node: ast.ClassDef):
-        self.class_stack.append(node.name)
-        self.classes.setdefault(node.name, [])
-        for base in node.bases:
-            bname = self._ast_name(base)
-            if bname:
-                self.inherits.append((node.name, bname))
-        self.generic_visit(node)
-        self.class_stack.pop()
-
-    def visit_FunctionDef(self, node: ast.FunctionDef):
-        current = self._record_function(node.name)
-        self.scope.append(current)
-        self.function_depth += 1
-        self.generic_visit(node)
-        self.function_depth -= 1
-        self.scope.pop()
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
-        current = self._record_function(node.name)
-        self.scope.append(current)
-        self.function_depth += 1
-        self.generic_visit(node)
-        self.function_depth -= 1
-        self.scope.pop()
-
-    def visit_Call(self, node: ast.Call):
-        callee = self._call_name(node.func)
-        if callee:
-            self.edges.add((self.scope[-1], callee))
-        self.generic_visit(node)
-
-    def _record_function(self, name: str) -> str:
-        if self.class_stack and self.function_depth == 0:
-            cls = self.class_stack[-1]
-            self.classes.setdefault(cls, []).append(name)
-            self.class_methods[cls].add(name)
-            qualified = f"{cls}.{name}"
-            self.qualified_methods.add(qualified)
-            return qualified
-        if not self.class_stack and self.function_depth == 0:
-            self.module_funcs.add(name)
-        return name
-
-    def _call_name(self, node: ast.AST) -> str:
-        if isinstance(node, ast.Name):
-            return node.id
-        if isinstance(node, ast.Attribute):
-            owner = node.value
-            method = node.attr
-            if isinstance(owner, ast.Name):
-                if owner.id in {"self", "cls"} and self.class_stack:
-                    cls = self.class_stack[-1]
-                    return f"{cls}.{method}"
-                if owner.id in self.class_methods:
-                    return f"{owner.id}.{method}"
-        return ""

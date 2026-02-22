@@ -76,6 +76,12 @@ The core philosophy of **pixrep** (rendering code → PDF with syntax highlighti
 pip install pixrep
 ```
 
+For PNG output support (`--format png`), install optional extras:
+
+```bash
+pip install "pixrep[png]"
+```
+
 ## 🛠️ Usage
 
 ### Quick Start
@@ -152,6 +158,13 @@ pixrep query . -q "CodeInsight" --semantic --tui
    file content is decoded only when needed for PDF rendering.
 
 This reduces memory pressure and disk I/O for repository exploration workflows.
+
+Lint/semantic caches are now stored in user cache directories by default:
+
+* Windows: `%LOCALAPPDATA%/pixrep/cache/<repo_name>`
+* Linux/macOS: `$XDG_CACHE_HOME/pixrep/<repo_name>` or `~/.cache/pixrep/<repo_name>`
+
+You can override with `PIXREP_CACHE_DIR`.
 
 ## 📂 Output Structure
 

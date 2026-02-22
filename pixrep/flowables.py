@@ -41,6 +41,29 @@ def _is_simple_number(word: str) -> bool:
     return True
 
 
+def _count_unescaped_triple_quotes(line: str) -> int:
+    count = 0
+    i = 0
+    length = len(line)
+    while i + 2 < length:
+        marker = line[i : i + 3]
+        if marker not in {"'''", '"""'}:
+            i += 1
+            continue
+
+        backslashes = 0
+        j = i - 1
+        while j >= 0 and line[j] == "\\":
+            backslashes += 1
+            j -= 1
+        if backslashes % 2 == 0:
+            count += 1
+            i += 3
+            continue
+        i += 1
+    return count
+
+
 class CodeBlockChunk(Flowable):
     """
     渲染一段代码行，保证高度不超页面。
@@ -81,8 +104,7 @@ class CodeBlockChunk(Flowable):
         if self.language == "python":
             for line in self.code_lines:
                 mask.append(in_ml)
-                # Toggle on odd number of triple quotes.
-                toggles = (line.count("'''") + line.count('"""')) % 2
+                toggles = _count_unescaped_triple_quotes(line) % 2
                 if toggles:
                     # The line with the delimiter is part of the string region.
                     mask[-1] = True

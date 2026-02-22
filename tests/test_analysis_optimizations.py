@@ -52,6 +52,21 @@ class TestAnalysisOptimizations(unittest.TestCase):
         joined = "\n".join(semantic.lines)
         self.assertIn("foo -> bar", joined)
 
+    def test_python_nested_function_is_tracked(self):
+        content = "\n".join([
+            "def outer():",
+            "    def inner():",
+            "        return helper()",
+            "    return inner()",
+            "",
+            "def helper():",
+            "    return 1",
+        ])
+        semantic = self.engine._python_semantic_map(content)
+        joined = "\n".join(semantic.lines)
+        self.assertIn("outer.inner -> helper", joined)
+        self.assertGreaterEqual(semantic.node_count, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -598,11 +598,14 @@ def main(argv: list[str] | None = None) -> int:
     known_commands = {"generate", "list", "query", "help", "onepdf", "allinone"}
     if raw_args:
         first = raw_args[0]
+        has_windows_drive = bool(re.match(r"^[A-Za-z]:[\\/]", first))
+        has_uri_scheme = bool(re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", first))
         looks_like_path = (
             first.startswith(".")
             or ("/" in first)
             or ("\\" in first)
-            or (":" in first)
+            or has_windows_drive
+            or has_uri_scheme
         )
         if (first not in known_commands) and (not first.startswith("-")):
             if looks_like_path and not Path(first).exists():

@@ -67,7 +67,7 @@ class RepoScanner:
                     total += chunk.count(b"\n")
                     ends_with_newline = chunk.endswith(b"\n")
             if total == 0:
-                # Distinguish empty file (already filtered out) from single-line files.
+                # Non-empty file with no newline terminators.
                 return 1
             if not ends_with_newline:
                 total += 1

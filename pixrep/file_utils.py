@@ -41,28 +41,28 @@ def compile_ignore_matcher(patterns: list[str]):
 
     Returns a callable: matcher(path_posix: str) -> bool
     """
-    lowered = [p.lower() for p in patterns if p]
-    if not lowered:
+    normalized = [normalize_posix_path(p) for p in patterns if p]
+    if not normalized:
         return lambda _path: False
 
-    path_patterns = [p for p in lowered if "/" in p]
-    basename_patterns = [p for p in lowered if "/" not in p]
+    path_patterns = [p for p in normalized if "/" in p]
+    basename_patterns = [p for p in normalized if "/" not in p]
 
     path_re = None
     basename_re = None
     if path_patterns:
         path_pieces = [f"(?:{fnmatch.translate(p)})" for p in path_patterns]
-        path_re = re.compile("|".join(path_pieces))
+        path_re = re.compile("|".join(path_pieces), re.IGNORECASE)
     if basename_patterns:
         base_pieces = [f"(?:{fnmatch.translate(p)})" for p in basename_patterns]
-        basename_re = re.compile("|".join(base_pieces))
+        basename_re = re.compile("|".join(base_pieces), re.IGNORECASE)
 
     def _match(path_posix: str) -> bool:
-        lower = path_posix.lower()
-        if path_re and path_re.match(lower):
+        normalized_path = normalize_posix_path(path_posix)
+        if path_re and path_re.match(normalized_path):
             return True
         if basename_re:
-            base = PurePosixPath(lower).name
+            base = PurePosixPath(normalized_path).name
             return bool(basename_re.match(base))
         return False
 

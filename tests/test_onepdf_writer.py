@@ -3,17 +3,22 @@ import unittest
 import uuid
 from pathlib import Path
 
-from pixrep.onepdf_writer import MinimalPDFWriter
+from pixrep.onepdf_writer import StreamingPDFWriter, pdf_escape_literal
 
 
-class TestMinimalPDFWriter(unittest.TestCase):
+class TestStreamingPDFWriter(unittest.TestCase):
+    def test_pdf_escape_literal_escapes_newlines(self):
+        escaped = pdf_escape_literal("a(1)\\b\nline\r")
+        self.assertEqual(escaped, "a\\(1\\)\\\\b\\nline\\r")
+
     def test_build_writes_valid_pdf_skeleton(self):
         tmp_root = Path(__file__).resolve().parents[1] / ".test_scratch"
         tmp_root.mkdir(parents=True, exist_ok=True)
         out_pdf = tmp_root / f"onepdf_writer_{uuid.uuid4().hex}.pdf"
         try:
-            writer = MinimalPDFWriter(title="demo")
-            writer.build([b"BT\n/F1 10 Tf\n(hello) Tj\nET\n"], out_pdf)
+            writer = StreamingPDFWriter(title="demo", out_path=out_pdf)
+            writer.add_page(b"BT\n/F1 10 Tf\n(hello) Tj\nET\n")
+            writer.finalize()
 
             blob = out_pdf.read_bytes()
             self.assertTrue(blob.startswith(b"%PDF-1.4"))

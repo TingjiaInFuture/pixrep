@@ -21,6 +21,8 @@ from .models import FileInfo, RepoInfo
 
 log = logging.getLogger(__name__)
 
+SCOPE_LOOKBACK_LINES = 120
+
 
 @dataclass(frozen=True)
 class MatchLocation:
@@ -236,9 +238,23 @@ class SemanticSearcher:
     def __init__(self, repo: RepoInfo, max_results: int = 300):
         self.repo = repo
         self.max_results = max_results
-        self._cache_root = self.repo.root / ".pixrep_cache"
+        self._cache_root = self._resolve_cache_root()
         self._cache_root.mkdir(parents=True, exist_ok=True)
         self._index_path = self._cache_root / "symbol_index.json"
+
+    def _resolve_cache_root(self) -> Path:
+        env = os.environ.get("PIXREP_CACHE_DIR", "").strip()
+        if env:
+            return Path(env).expanduser().resolve() / self.repo.name / "query"
+
+        if os.name == "nt":
+            base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+            return base / "pixrep" / "cache" / self.repo.name / "query"
+
+        xdg = os.environ.get("XDG_CACHE_HOME", "").strip()
+        if xdg:
+            return Path(xdg).expanduser().resolve() / "pixrep" / self.repo.name / "query"
+        return Path.home() / ".cache" / "pixrep" / self.repo.name / "query"
 
     def search(
         self,
@@ -505,7 +521,7 @@ class ContextExtractor:
         found_header_line: int | None = None
         header_indent = match_indent
 
-        for i in range(match_line - 1, max(0, match_line - 120) - 1, -1):
+        for i in range(match_line - 1, max(0, match_line - SCOPE_LOOKBACK_LINES) - 1, -1):
             stripped = stripped_lines[i]
             if not stripped:
                 continue

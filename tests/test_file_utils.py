@@ -5,6 +5,7 @@ import uuid
 
 from pixrep.file_utils import (
     build_tree,
+    compile_ignore_matcher,
     detect_language,
     is_probably_text,
     line_count_from_bytes,
@@ -23,6 +24,13 @@ class TestFileUtils(unittest.TestCase):
         self.assertTrue(matches_any("SRC/Main.PY", ["src/*.py"]))
         self.assertTrue(matches_any("README.md", ["readme.md"]))
         self.assertFalse(matches_any("src/main.py", ["src/*.js"]))
+
+    def test_compile_ignore_matcher_case_insensitive(self):
+        matcher = compile_ignore_matcher(["SRC/*.PY", "README.*"])
+        self.assertTrue(matcher("src/main.py"))
+        self.assertTrue(matcher("ReadMe.md"))
+        self.assertTrue(matcher("docs/readme.rst"))
+        self.assertFalse(matcher("docs/guide.rst"))
 
     def test_is_probably_text(self):
         self.assertTrue(is_probably_text(b"hello\nworld"))

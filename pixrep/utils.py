@@ -62,7 +62,7 @@ def truncate_to_width(text: str, font_size: float, max_width: float) -> str:
     return text
 
 
-def pdf_bytes_to_long_png(pdf_bytes: bytes, dpi: int = 150) -> bytes:
+def pdf_bytes_to_long_png(pdf_bytes: bytes, dpi: int = 150, max_total_pixels: int = 120_000_000) -> bytes:
     """将 PDF 字节流渲染为单张垂直拼接长图的 PNG 字节流。
 
     Parameters
@@ -87,6 +87,7 @@ def pdf_bytes_to_long_png(pdf_bytes: bytes, dpi: int = 150) -> bytes:
     images: list[Image.Image] = []
     total_height = 0
     max_width = 0
+    total_pixels = 0
 
     for page in doc:
         pix = page.get_pixmap(dpi=dpi)
@@ -94,8 +95,24 @@ def pdf_bytes_to_long_png(pdf_bytes: bytes, dpi: int = 150) -> bytes:
         images.append(img)
         total_height += pix.height
         max_width = max(max_width, pix.width)
+        total_pixels += pix.width * pix.height
 
     doc.close()
+
+    if total_pixels > max_total_pixels and total_pixels > 0:
+        scale = (max_total_pixels / total_pixels) ** 0.5
+        resized: list[Image.Image] = []
+        total_height = 0
+        max_width = 0
+        for img in images:
+            new_w = max(1, int(img.width * scale))
+            new_h = max(1, int(img.height * scale))
+            shrunk = img.resize((new_w, new_h), resample=Image.Resampling.LANCZOS)
+            resized.append(shrunk)
+            total_height += new_h
+            max_width = max(max_width, new_w)
+            img.close()
+        images = resized
 
     if not images:
         canvas = Image.new("RGB", (1, 1), color="white")
@@ -105,6 +122,7 @@ def pdf_bytes_to_long_png(pdf_bytes: bytes, dpi: int = 150) -> bytes:
         for img in images:
             canvas.paste(img, (0, y_offset))
             y_offset += img.height
+            img.close()
 
     out_buf = io.BytesIO()
     canvas.save(out_buf, format="PNG", optimize=True)
