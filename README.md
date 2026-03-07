@@ -1,6 +1,7 @@
 <div align="center">
 
-# pixrep
+# <img src="https://github.com/user-attachments/assets/2d378b5c-bfd9-4105-a8c2-ce67f8d542fa" width="60" alt="pixrep logo" style="vertical-align: middle;" /> pixrep
+
 
 # 📉 SAVE UP TO 90% TOKENS
 
