@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import subprocess
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -12,12 +11,11 @@ from .file_utils import (
     compile_ignore_matcher,
     normalize_posix_path,
 )
-from .onepdf_writer import StreamingPDFWriter, pdf_escape_literal
+from .onepdf_writer import StreamingPDFWriter
 from .scanner import RepoScanner
 
 # Pre-built translate table shared by all _ascii_safe calls.
 _ASCII_SAFE_TABLE = str.maketrans({"\t": "    ", "\r": ""})
-_NON_ASCII_RE = re.compile(r"[^\x20-\x7e\n]")
 
 
 DEFAULT_CORE_IGNORE_PATTERNS = [
@@ -157,10 +155,7 @@ def collect_core_files(
 
 
 def _ascii_safe(s: str) -> str:
-    if s.isascii():
-        return s.translate(_ASCII_SAFE_TABLE)
-    translated = s.translate(_ASCII_SAFE_TABLE)
-    return _NON_ASCII_RE.sub(lambda m: f"\\u{ord(m.group()):04x}", translated)
+    return s.translate(_ASCII_SAFE_TABLE)
 
 
 def _wrap_line(line: str, max_cols: int) -> list[str]:
@@ -209,19 +204,7 @@ def pack_repo_to_one_pdf(
     def flush_page() -> None:
         if not current:
             return
-        start_x = 36
-        start_y = 842 - 36 - font_size
-        parts: list[bytes] = [
-            b"BT\n",
-            b"/F1 %d Tf\n" % font_size,
-            b"%d TL\n" % leading,
-            b"%d %d Td\n" % (start_x, start_y),
-        ]
-        for line in current:
-            esc = pdf_escape_literal(line)
-            parts.append(b"(" + esc.encode("ascii", errors="replace") + b") Tj\nT*\n")
-        parts.append(b"ET\n")
-        writer.add_page(b"".join(parts))
+        writer.add_page_lines(current, font_size=font_size, leading=leading)
         current.clear()
 
     def emit(line: str) -> None:

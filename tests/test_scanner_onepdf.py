@@ -36,7 +36,7 @@ class TestScannerAndOnepdf(unittest.TestCase):
         root = tmp_root / f"repo_{uuid.uuid4().hex}"
         try:
             root.mkdir()
-            (root / "a.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+            (root / "a.py").write_text("def f():\n    注释 = '中文'\n    return 注释\n", encoding="utf-8")
             (root / "b.js").write_text("function g(){ return f(); }\n", encoding="utf-8")
 
             out_pdf = tmp_root / f"out_{uuid.uuid4().hex}.pdf"

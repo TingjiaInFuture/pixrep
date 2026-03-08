@@ -247,9 +247,8 @@ Examples:
             parents=[common],
             help=help_text,
             description=(
-                "Pack files into a single minimized PDF. Note: onepdf uses an ASCII-only PDF text writer; "
-                "non-ASCII characters will be escaped as \\uXXXX. "
-                "/ 打包为单个极简 PDF。注意：onepdf 使用仅 ASCII 的 PDF 文本写入器，非 ASCII 字符会转义为 \\uXXXX。"
+                "Pack files into a single minimized PDF with CJK text support when a system font is available. "
+                "/ 打包为单个极简 PDF；如果系统存在可用字体，则支持中文等 CJK 文本。"
             ),
             formatter_class=argparse.RawTextHelpFormatter,
         )

@@ -17,12 +17,12 @@ class TestStreamingPDFWriter(unittest.TestCase):
         out_pdf = tmp_root / f"onepdf_writer_{uuid.uuid4().hex}.pdf"
         try:
             writer = StreamingPDFWriter(title="demo", out_path=out_pdf)
-            writer.add_page(b"BT\n/F1 10 Tf\n(hello) Tj\nET\n")
+            writer.add_page_lines(["hello", "中文内容"])
             writer.finalize()
 
             blob = out_pdf.read_bytes()
-            self.assertTrue(blob.startswith(b"%PDF-1.4"))
-            self.assertIn(b"xref\n0 6\n", blob)
+            self.assertTrue(blob.startswith(b"%PDF-"))
+            self.assertIn(b"xref\n", blob)
             self.assertIn(b"startxref\n", blob)
             self.assertTrue(blob.rstrip().endswith(b"%%EOF"))
         finally:
